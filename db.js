@@ -49,6 +49,7 @@ function dbGet(table, id) {
   let data = tableCache(table)[id];
   if (data === undefined) {
     if (fs.existsSync(file)) {
+      console.log(`Loading ${table} with ID ${id} from disk: '${file}'`)
       data = dbDeserialize(fs.readFileSync(file));
     } else {
       data = null;
@@ -68,6 +69,9 @@ function dbGetAll(table) {
   const files = fs.readdirSync(dbDir(table));
   const all = [];
   for (const file of files) {
+    if (!file.endsWith('.json')) {
+      continue;
+    }
     const id = file.split('.')[0];
     const data = dbGet(table, id);
     if (!data) {
