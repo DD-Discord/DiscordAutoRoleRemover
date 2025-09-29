@@ -1,9 +1,7 @@
-version: '3.5'
-
 services:
-  imaptodiscord:
+  roleautoremover:
     container_name: roleautoremover
-    image: kayleesachs/roleautoremover:latest
+    image: ghcr.io/dd-discord/discordautoroleremover:master
     volumes:
        - /root/roleautoremover/env:/roleautoremover/.env.local
        - /root/roleautoremover/db:/roleautoremover/db
