@@ -29,6 +29,7 @@ async function maybeUpdateRoles(oldMember, newMember) {
         continue;
       }
 
+      console.log(`Will remove ${role.id} (${role.name}) from ${newMember.id} (${newMember.displayName})`)
       try {
         await newMember.roles.remove(role, "Auto remover: " + setting.roleName);
       } catch(error) {
