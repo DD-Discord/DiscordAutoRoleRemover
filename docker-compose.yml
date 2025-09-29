@@ -1,0 +1,14 @@
+version: '3.5'
+
+services:
+  imaptodiscord:
+    container_name: roleautoremover
+    image: kayleesachs/roleautoremover:latest
+    volumes:
+       - /root/roleautoremover/env:/roleautoremover/.env.local
+       - /root/roleautoremover/db:/roleautoremover/db
+    logging:
+      driver: journald
+      options:
+        tag: "{{.ImageName}}/{{.Name}}/{{.ID}}"
+    restart: unless-stopped

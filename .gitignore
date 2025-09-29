@@ -1,0 +1,8 @@
+# Configuratrion
+.env.local
+
+# Libraries
+node_modules/
+
+# Save data
+data/**/*.json
