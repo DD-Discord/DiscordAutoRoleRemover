@@ -1,6 +1,7 @@
 const { GuildMember } = require("discord.js");
 const { dbGetAll } = require("./db");
-
+const db = require("../db");
+const crud = require("../crud");
 /**
  * Checks and removes roles.
  * @param {GuildMember} oldMember The old member.

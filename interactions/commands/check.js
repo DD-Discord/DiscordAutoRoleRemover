@@ -1,6 +1,5 @@
-const { CommandInteraction, SlashCommandBuilder } = require("discord.js");
-const { dbGetAll, dbSerialize } = require("../db");
-const { PermissionFlagsBits } = require('discord-api-types/v10');
+const { CommandInteraction, SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
+const { dbGetAll, dbSerialize } = require("../../db");
 
 module.exports.name = "role-remover-check";
 

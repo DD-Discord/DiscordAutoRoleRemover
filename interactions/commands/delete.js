@@ -1,6 +1,5 @@
-const { CommandInteraction, SlashCommandBuilder, Role } = require("discord.js");
-const { dbGet, dbWrite, dbDelete } = require("../db");
-const { PermissionFlagsBits } = require('discord-api-types/v10');
+const { CommandInteraction, SlashCommandBuilder, Role, PermissionFlagsBits } = require("discord.js");
+const { dbGet, dbWrite, dbDelete } = require("../../db");
 
 module.exports.name = "role-remover-delete";
 

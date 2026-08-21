@@ -1,0 +1,3 @@
+- Always ask before committing changes to Git.
+- Stick to best practices for frameworks used. Research current best ptracises from documentation instead of purely relying on training data. Commit information about these to memory.
+- Before pinning any new dependency version, check the actual current version on the registry (e.g. `npm view <pkg> version`) instead of writing a version from memory/training knowledge.

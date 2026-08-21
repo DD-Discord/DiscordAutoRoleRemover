@@ -1,28 +1,95 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require("crypto");
+
+/**
+ * A table name.
+ * @typedef {(string | string[])} Table
+ */
+
+/**
+ * Base type for all DB records
+ * @typedef {Object} DbRecord
+ * @property {Date?} createdAt When the record was created. Only set during the first save.
+ * @property {Date?} updatedAt When the record was last saved. Set on each save.
+ */
 
 const cache = {};
 
+function tableToStr(table) {
+  if (Array.isArray(table)) {
+    table = table.join('/');
+  }
+  return table;
+}
+
+/**
+ * Gets the cache of a table.
+ * @param {Table} table The table name
+ * @returns {Record<string, DbRecord>} The cache
+ */
 function tableCache(table) {
+  table = tableToStr(table);
   let tableCache = cache[table];
   if (!tableCache) {
-    tableCache = {};
-    cache[table] = tableCache;
+    throw new Error(`The table '${table}' has not been registered.`);
   }
   return tableCache;
 }
 
+/**
+ * Generates a random hexadecimal ID string.
+ * @returns {string} The ID.
+ */
+function dbId() {
+  return crypto.randomUUID().toString().replaceAll('-', '');
+}
+module.exports.dbId = dbId;
+
+/**
+ * Registers a table and ensures its directory exists.
+ * @param {Table} table The table to register.
+ */
+function dbRegister(table) {
+  const dir = dbDir(table);
+  if (!fs.existsSync(dir)){
+    fs.mkdirSync(dir, { recursive: true });
+    console.log('Created table', table, dir);
+  }
+  cache[tableToStr(table)] = {};
+  console.log('Registered table', table)
+}
+module.exports.dbRegister = dbRegister;
+
+/**
+ * Serializes an object to the database, using its internal replacer function.
+ * @param {DbRecord} data The data to serialize.
+ * @returns {string} The string for the database.
+ */
 function dbSerialize(data) {
   return JSON.stringify(data, replacer, 2);
 }
 module.exports.dbSerialize = dbSerialize;
 
+/**
+ * Deserializes an object previously serialized via `dbSerialize` by using its internal reviver function.
+ * @param {string} data The string to deserialize.
+ * @returns {DbRecord} The object.
+ */
 function dbDeserialize(data) {
   return JSON.parse(data, reviver);
 }
 module.exports.dbDeserialize = dbDeserialize;
 
+/**
+ * Deletes an entry from the database.
+ * @param {Table} table The table name
+ * @param {string} id The record ID.
+ */
 function dbDelete(table, id) {
+  if (typeof id !== 'string') {
+    throw new Error(`Invalid ID '${id}' for table '${tableToStr(table)}'`);
+  }
   const file = dbFile(table, id);
   if (fs.existsSync(file)) {
     fs.unlinkSync(file);
@@ -31,7 +98,20 @@ function dbDelete(table, id) {
 }
 module.exports.dbDelete = dbDelete;
 
+/**
+ * Writes an entry to the database.
+ * @param {Table} table The table.
+ * @param {string} id The record ID.
+ * @param {DbRecord} data The data to write.
+ */
 function dbWrite(table, id, data) {
+  if (typeof id !== 'string') {
+    throw new Error(`Invalid ID '${id}' for table '${tableToStr(table)}'`);
+  }
+  if (!data.createdAt) {
+    data.createdAt = new Date();
+  }
+  data.updatedAt = new Date();
   const file = dbFile(table, id);
   fs.writeFileSync(file, dbSerialize(data));
   tableCache(table)[id] = data;
@@ -40,11 +120,14 @@ module.exports.dbWrite = dbWrite;
 
 /**
  * Gets an entry from the database.
- * @param {string} table The table name
+ * @param {Table} table The table name
  * @param {string} id The record ID.
- * @returns {object | null} The entry
+ * @returns {DbRecord | null} The entry
  */
 function dbGet(table, id) {
+  if (typeof id !== 'string') {
+    throw new Error(`Invalid ID '${id}' for table '${tableToStr(table)}'`);
+  }
   const file = dbFile(table, id);
   let data = tableCache(table)[id];
   if (data === undefined) {
@@ -62,8 +145,8 @@ module.exports.dbGet = dbGet;
 
 /**
  * Gets all entires of a given table from the database.
- * @param {string} table The table name
- * @returns {object[]} The entries
+ * @param {Table} table The table name
+ * @returns {DbRecord[]} The entries
  */
 function dbGetAll(table) {
   const files = fs.readdirSync(dbDir(table));
@@ -84,15 +167,25 @@ function dbGetAll(table) {
 module.exports.dbGetAll = dbGetAll;
 
 function dbDir(table) {
-  return path.join('data', dbSafe(table));
+  return path.join('data', ...dbSafe(table));
 }
 
 function dbFile(table, id) {
-  return path.join('data', dbSafe(table), `${dbSafe(id)}.json`);
+  return path.join('data', ...dbSafe(table), `${dbSafe(id).join('')}.json`);
 }
 
-function dbSafe(str) {
-  return str.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+/**
+ * @param {Table} value
+ * @returns {string[]}
+ */
+function dbSafe(value) {
+  if (!value) {
+    throw new Error('Parts of a DB safe string is false-y. Maybe you forgot to pass a table as a parameter?')
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(dbSafe);
+  }
+  return [value.replaceAll(/[^a-z0-9]/gi, '_').toLowerCase()];
 }
 
 function reviver(key, value) {
@@ -156,6 +249,24 @@ const customTypes = {
     /** @param {Array} value */
     reviver: function (value) {
       return new Set(value);
+    },
+  },
+  $map: {
+    /** @param {Map} value */
+    condition: function (value) {
+      return value instanceof Map;
+    },
+    /** @param {Map} value */
+    replacer: function (value) {
+      return Array.from(value.entries());
+    },
+    /** @param {Array} value */
+    reviver: function (value) {
+      const map = new Map();
+      for (const [mapKey, mapValue] of value) {
+        map.set(mapKey, mapValue);
+      }
+      return map;
     },
   },
 }

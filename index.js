@@ -1,7 +1,7 @@
-const { Client, GatewayIntentBits } = require("discord.js");
-const { deployCommands, handleCommand } = require("./deploy-commands");
+const { Client, GatewayIntentBits, Events } = require("discord.js");
+const interactions = require("./interactions");
 const config = require("./config");
-const { maybeUpdateRoles } = require("./logic");
+const { maybeUpdateRoles } = require("./logic/update");
 
 const client = new Client({
   intents: [
@@ -10,31 +10,29 @@ const client = new Client({
 	],
 });
 
-client.once("clientReady", () => {
+client.once(Events.ClientReady, () => {
   console.log("Discord bot is ready! 🤖");
 });
 
-client.on("guildAvailable", async (guild) => {
-  await deployCommands({ guildId: guild.id });
-});
+async function setupGuild(guild) {
+  await interactions.deploy({ guildId: guild.id });
+}
 
-client.on('messageCreate', async (message) => {
-  if (message.channel != null) {
-    maybeRepost(message.channel, message).catch(console.error);
-  }
-});
+// GuildAvailable covers guilds the bot is already in (Discord sends them as
+// unavailable stubs in the initial READY payload, then flips them available
+// shortly after). GuildCreate covers the bot joining a brand-new guild while
+// already running - a separate event, only emitted for that case.
+client.on(Events.GuildAvailable, setupGuild);
+client.on(Events.GuildCreate, setupGuild);
 
-client.on("guildMemberUpdate", async (oldMember, newMember) => {
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   await maybeUpdateRoles(oldMember, newMember);
 });
 
-client.on("interactionCreate", async (interaction) => {
-  if (interaction.isCommand()) {
-    try {
-      await handleCommand(interaction);
-    } catch (error) {
-      console.error(error);
-    }
+client.on(Events.InteractionCreate, async (interaction) => {
+  const handled = await interactions.handle(interaction);
+  if (!handled) {
+    console.warn('Unhandled interaction', interaction);
   }
 });
 client.login(config.DISCORD_TOKEN);
