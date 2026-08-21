@@ -1,12 +1,10 @@
-const { CommandInteraction, SlashCommandBuilder, Role, PermissionFlagsBits } = require("discord.js");
-const discord = require("discord.js");
-const { dbGet, dbWrite, dbDelete } = require("../../db");
-const { roleRemoverData } = require("../../logic/update");
+import { SlashCommandBuilder, PermissionFlagsBits, ChatInputCommandInteraction } from "discord.js";
+import { roleRemoverData } from "../../logic/update.js";
 
-module.exports.name = "role-remover-delete";
+export const name = "role-remover-delete";
 
-module.exports.data = new SlashCommandBuilder()
-  .setName(module.exports.name)
+export const data = new SlashCommandBuilder()
+  .setName(name)
   .setDescription("Disables a role to be auto removed.")
   .addRoleOption(option => {
     option.setName("when");
@@ -22,15 +20,12 @@ module.exports.data = new SlashCommandBuilder()
   })
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles);
 
-/**
- * @param {discord.ChatInputCommandInteraction} interaction
- */
-module.exports.execute = async function(interaction) {
-  // Get settings
-  const optWhen = interaction.options.getRole("when");
-  const optRemove = interaction.options.getRole("remove");
+export async function execute(interaction: ChatInputCommandInteraction): Promise<unknown> {
+  const optWhen = interaction.options.getRole("when", true);
+  const optRemove = interaction.options.getRole("remove", true);
+  const guildId = interaction.guildId!;
 
-  const settings = roleRemoverData.get(interaction, optWhen.id);
+  const settings = roleRemoverData.get({ guildId }, optWhen.id);
   if (!settings) {
     return interaction.reply({
       content: "No auto remove settings for this role.",
@@ -39,16 +34,15 @@ module.exports.execute = async function(interaction) {
   }
 
   delete settings.remove[optRemove.id];
-  // Done
   if (Object.keys(settings.remove).length === 0) {
-    roleRemoverData.delete(interaction, optWhen.id);
+    roleRemoverData.delete({ guildId }, settings);
     return interaction.reply({
       content: `Disabled all role removal for <@&${optWhen.id}>.`,
     });
   } else {
-    roleRemoverData.write(interaction, settings);
+    roleRemoverData.write({ guildId }, settings);
     return interaction.reply({
       content: `Will no longer automatically remove role <@&${optRemove.id}> from members without <@&${optWhen.id}>.`,
     });
   }
-};
+}

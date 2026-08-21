@@ -1,92 +1,82 @@
-const fs = require('fs');
-const path = require('path');
-const crypto = require("crypto");
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
 
 /**
  * A table name.
- * @typedef {(string | string[])} Table
  */
+export type Table = string | string[];
 
 /**
  * Base type for all DB records
- * @typedef {Object} DbRecord
- * @property {Date?} createdAt When the record was created. Only set during the first save.
- * @property {Date?} updatedAt When the record was last saved. Set on each save.
  */
+export interface DbRecord {
+  /** When the record was created. Only set during the first save. */
+  createdAt?: Date;
+  /** When the record was last saved. Set on each save. */
+  updatedAt?: Date;
+}
 
-const cache = {};
+const cache: Record<string, Record<string, unknown>> = {};
 
-function tableToStr(table) {
+function tableToStr(table: Table): string {
   if (Array.isArray(table)) {
-    table = table.join('/');
+    return table.join('/');
   }
   return table;
 }
 
 /**
  * Gets the cache of a table.
- * @param {Table} table The table name
- * @returns {Record<string, DbRecord>} The cache
  */
-function tableCache(table) {
-  table = tableToStr(table);
-  let tableCache = cache[table];
+function tableCache(table: Table): Record<string, unknown> {
+  const str = tableToStr(table);
+  const tableCache = cache[str];
   if (!tableCache) {
-    throw new Error(`The table '${table}' has not been registered.`);
+    console.error(cache)
+    throw new Error(`The table '${str}' has not been registered.`);
   }
   return tableCache;
 }
 
 /**
  * Generates a random hexadecimal ID string.
- * @returns {string} The ID.
  */
-function dbId() {
+export function dbId(): string {
   return crypto.randomUUID().toString().replaceAll('-', '');
 }
-module.exports.dbId = dbId;
 
 /**
  * Registers a table and ensures its directory exists.
- * @param {Table} table The table to register.
  */
-function dbRegister(table) {
+export function dbRegister(table: Table): void {
   const dir = dbDir(table);
-  if (!fs.existsSync(dir)){
+  if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     console.log('Created table', table, dir);
   }
   cache[tableToStr(table)] = {};
-  console.log('Registered table', table)
+  console.log('Registered table', table, cache)
 }
-module.exports.dbRegister = dbRegister;
 
 /**
  * Serializes an object to the database, using its internal replacer function.
- * @param {DbRecord} data The data to serialize.
- * @returns {string} The string for the database.
  */
-function dbSerialize(data) {
+export function dbSerialize(data: object): string {
   return JSON.stringify(data, replacer, 2);
 }
-module.exports.dbSerialize = dbSerialize;
 
 /**
  * Deserializes an object previously serialized via `dbSerialize` by using its internal reviver function.
- * @param {string} data The string to deserialize.
- * @returns {DbRecord} The object.
  */
-function dbDeserialize(data) {
+export function dbDeserialize<T>(data: string): T {
   return JSON.parse(data, reviver);
 }
-module.exports.dbDeserialize = dbDeserialize;
 
 /**
  * Deletes an entry from the database.
- * @param {Table} table The table name
- * @param {string} id The record ID.
  */
-function dbDelete(table, id) {
+export function dbDelete(table: Table, id: string): void {
   if (typeof id !== 'string') {
     throw new Error(`Invalid ID '${id}' for table '${tableToStr(table)}'`);
   }
@@ -96,15 +86,11 @@ function dbDelete(table, id) {
   }
   delete tableCache(table)[id];
 }
-module.exports.dbDelete = dbDelete;
 
 /**
  * Writes an entry to the database.
- * @param {Table} table The table.
- * @param {string} id The record ID.
- * @param {DbRecord} data The data to write.
  */
-function dbWrite(table, id, data) {
+export function dbWrite<T extends DbRecord>(table: Table, id: string, data: T): void {
   if (typeof id !== 'string') {
     throw new Error(`Invalid ID '${id}' for table '${tableToStr(table)}'`);
   }
@@ -116,47 +102,41 @@ function dbWrite(table, id, data) {
   fs.writeFileSync(file, dbSerialize(data));
   tableCache(table)[id] = data;
 }
-module.exports.dbWrite = dbWrite;
 
 /**
  * Gets an entry from the database.
- * @param {Table} table The table name
- * @param {string} id The record ID.
- * @returns {DbRecord | null} The entry
  */
-function dbGet(table, id) {
+export function dbGet<T extends DbRecord>(table: Table, id: string): T | null {
   if (typeof id !== 'string') {
     throw new Error(`Invalid ID '${id}' for table '${tableToStr(table)}'`);
   }
   const file = dbFile(table, id);
-  let data = tableCache(table)[id];
+  const tc = tableCache(table);
+  let data = tc[id] as T | null | undefined;
   if (data === undefined) {
     if (fs.existsSync(file)) {
       console.log(`Loading ${table} with ID ${id} from disk: '${file}'`)
-      data = dbDeserialize(fs.readFileSync(file));
+      data = dbDeserialize<T>(fs.readFileSync(file, "utf-8"));
     } else {
       data = null;
     }
-    tableCache(table)[id] = data;
+    tc[id] = data;
   }
   return data;
 }
-module.exports.dbGet = dbGet;
 
 /**
  * Gets all entires of a given table from the database.
- * @param {Table} table The table name
- * @returns {DbRecord[]} The entries
  */
-function dbGetAll(table) {
+export function dbGetAll<T extends DbRecord>(table: Table): T[] {
   const files = fs.readdirSync(dbDir(table));
-  const all = [];
+  const all: T[] = [];
   for (const file of files) {
     if (!file.endsWith('.json')) {
       continue;
     }
-    const id = file.split('.')[0];
-    const data = dbGet(table, id);
+    const id = file.split('.')[0]!;
+    const data = dbGet<T>(table, id);
     if (!data) {
       continue;
     }
@@ -164,21 +144,16 @@ function dbGetAll(table) {
   }
   return all;
 }
-module.exports.dbGetAll = dbGetAll;
 
-function dbDir(table) {
+function dbDir(table: Table): string {
   return path.join('data', ...dbSafe(table));
 }
 
-function dbFile(table, id) {
+function dbFile(table: Table, id: string): string {
   return path.join('data', ...dbSafe(table), `${dbSafe(id).join('')}.json`);
 }
 
-/**
- * @param {Table} value
- * @returns {string[]}
- */
-function dbSafe(value) {
+function dbSafe(value: Table): string[] {
   if (!value) {
     throw new Error('Parts of a DB safe string is false-y. Maybe you forgot to pass a table as a parameter?')
   }
@@ -188,25 +163,25 @@ function dbSafe(value) {
   return [value.replaceAll(/[^a-z0-9]/gi, '_').toLowerCase()];
 }
 
-function reviver(key, value) {
-  if (typeof value === "object" && value != null) {
+function reviver(this: unknown, _key: string, value: unknown): unknown {
+  if (typeof value === "object" && value !== null) {
     for (const customTypeName in customTypes) {
-      if (value.hasOwnProperty(customTypeName)) {
-        const customTypeValue = value[customTypeName];
-        const customType = customTypes[customTypeName];
-        return customType.reviver(customTypeValue);
+      if (Object.prototype.hasOwnProperty.call(value, customTypeName)) {
+        const customTypeValue = (value as Record<string, unknown>)[customTypeName];
+        const customType = customTypes[customTypeName as keyof typeof customTypes];
+        return customType.reviver(customTypeValue as never);
       }
     }
   }
   return value;
 }
 
-function replacer(key, value) {
+function replacer(this: Record<string, unknown>, key: string, value: unknown): unknown {
   const rawValue = this[key];
   for (const customTypeName in customTypes) {
-    const customType = customTypes[customTypeName];
-    if (customType.condition(rawValue)) {
-      return { [customTypeName]: customType.replacer(rawValue) };
+    const customType = customTypes[customTypeName as keyof typeof customTypes];
+    if (customType.condition(rawValue as never)) {
+      return { [customTypeName]: customType.replacer(rawValue as never) };
     }
   }
   return value;
@@ -214,12 +189,12 @@ function replacer(key, value) {
 
 /**
  * Custom types support for JSON files. Make sure that no custom type names conflict with actual possible JSON keys.
- * 
+ *
  * When serializing:
  * - Custom types work by running the `condition` function of every value to be serialized.
  * - If it returns `true`, the `replacer` function is called with the value.
  * - The return value of the `replacer` will be saved to JSON wrapped in an object using the key of the custom type. (e.g. `{"$myType": "hello"}`).
- * 
+ *
  * When deserializing:
  * - Each value is checked if it is an object with a key of any custom type.
  * - If one is found, the `reviver` is called for the value of this key.
@@ -227,46 +202,24 @@ function replacer(key, value) {
  */
 const customTypes = {
   $date: {
-    condition: function (value) {
-      return value instanceof Date;
-    },
-    replacer: function (value) {
-      return value.toISOString();
-    },
-    reviver: function (value) {
-      return new Date(value);
-    },
+    condition: (value: unknown): value is Date => value instanceof Date,
+    replacer: (value: Date): string => value.toISOString(),
+    reviver: (value: string): Date => new Date(value),
   },
   $set: {
-    /** @param {Set} value */
-    condition: function (value) {
-      return value instanceof Set;
-    },
-    /** @param {Set} value */
-    replacer: function (value) {
-      return [...value];
-    },
-    /** @param {Array} value */
-    reviver: function (value) {
-      return new Set(value);
-    },
+    condition: (value: unknown): value is Set<unknown> => value instanceof Set,
+    replacer: (value: Set<unknown>): unknown[] => [...value],
+    reviver: (value: unknown[]): Set<unknown> => new Set(value),
   },
   $map: {
-    /** @param {Map} value */
-    condition: function (value) {
-      return value instanceof Map;
-    },
-    /** @param {Map} value */
-    replacer: function (value) {
-      return Array.from(value.entries());
-    },
-    /** @param {Array} value */
-    reviver: function (value) {
-      const map = new Map();
+    condition: (value: unknown): value is Map<unknown, unknown> => value instanceof Map,
+    replacer: (value: Map<unknown, unknown>): [unknown, unknown][] => Array.from(value.entries()),
+    reviver: (value: [unknown, unknown][]): Map<unknown, unknown> => {
+      const map = new Map<unknown, unknown>();
       for (const [mapKey, mapValue] of value) {
         map.set(mapKey, mapValue);
       }
       return map;
     },
   },
-}
+};

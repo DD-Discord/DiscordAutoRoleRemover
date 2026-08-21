@@ -1,20 +1,16 @@
-const { REST, Routes, CommandInteraction, AutocompleteInteraction } = require("discord.js");
-const { commands } = require("./commands");
-const config = require("../config");
+import { REST, Routes, ChatInputCommandInteraction, AutocompleteInteraction } from "discord.js";
+import { commands } from "./commands/index.js";
+import { config } from "../config.js";
 
 const commandsData = Object.values(commands).map((command) => command.data);
 
 const rest = new REST({ version: "10" }).setToken(config.DISCORD_TOKEN);
 
-/**
- * @typedef DeployCommandsProps
- * @property {string} guildId
- */
+export interface DeployCommandsProps {
+  guildId: string;
+}
 
-/**
- * @param {DeployCommandsProps}
- */
-module.exports.deployCommands = async function deployCommands({ guildId }) {
+export async function deployCommands({ guildId }: DeployCommandsProps): Promise<void> {
   try {
     console.log("Started refreshing commands in %s.", guildId);
     await rest.put(
@@ -30,10 +26,7 @@ module.exports.deployCommands = async function deployCommands({ guildId }) {
   }
 }
 
-/**
- * @param {CommandInteraction} interaction
- */
-module.exports.handleCommand = async function handleCommand(interaction) {
+export async function handleCommand(interaction: ChatInputCommandInteraction): Promise<boolean> {
   try {
     const { commandName } = interaction;
     console.log("Handle command %s in %s", commandName, interaction.guildId)
@@ -48,10 +41,7 @@ module.exports.handleCommand = async function handleCommand(interaction) {
   return false;
 }
 
-/**
- * @param {AutocompleteInteraction} interaction
- */
-module.exports.handleAutocomplete = async function handleAutocomplete(interaction) {
+export async function handleAutocomplete(interaction: AutocompleteInteraction): Promise<boolean> {
   try {
     const { commandName } = interaction;
     if (commands[commandName] && commands[commandName].autocomplete) {

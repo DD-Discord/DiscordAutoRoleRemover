@@ -1,23 +1,18 @@
-const { dbSerialize } = require("../db");
+import { dbSerialize } from "../db.js";
+import { ChannelInfo } from "./channel.js";
 
 const WHITESPACE_REGEX = /\s+/g;
 
-/**
- * @param {string} value
- */
-function sanitizeWhitespace(value) {
+export function sanitizeWhitespace(value: string): string {
   return value.replaceAll(WHITESPACE_REGEX, ' ');
 }
-module.exports.sanitizeWhitespace = sanitizeWhitespace;
 
 /**
  * Strips common Discord markdown syntax (code spans, bold/italic/underline,
  * strikethrough, spoilers, blockquotes, headings) from a string, leaving plain text.
  * Useful for contexts that render as plain text, like autocomplete choice labels.
- * @param {string} value
- * @returns {string}
  */
-function sanitizeMarkdown(value) {
+export function sanitizeMarkdown(value: string): string {
   return value
     .replace(/```([\s\S]*?)```/g, '$1')
     .replace(/`([^`]*)`/g, '$1')
@@ -31,33 +26,24 @@ function sanitizeMarkdown(value) {
     .replace(/#/g, ' ')
     .trim();
 }
-module.exports.sanitizeMarkdown = sanitizeMarkdown;
 
-/**
- * @param {string} value 
- * @param {number} maxLength 
- * @param {string} ellipsis 
- */
-function maxLength(value, maxLength, ellipsis = ' […]') {
+export function maxLength(value: string, maxLength: number, ellipsis = ' […]'): string {
   if (value.length > maxLength) {
     value = value.substring(0, maxLength - ellipsis.length);
     value += ellipsis;
   }
   return value;
 }
-module.exports.maxLength = maxLength;
 
 /**
  * Batches lines into chunks whose joined (newline-separated) length stays within
  * `maxLength`, without splitting a single line across chunks. Useful for sending
  * long lists as multiple Discord messages instead of one that overflows the limit.
  * A single line longer than `maxLength` becomes its own oversized chunk.
- * @param {string[]} lines The lines to batch.
- * @param {number} maxLength The max length per chunk. Defaults to Discord's message content limit.
- * @returns {string[]} The batched chunks.
+ * @param maxLength The max length per chunk. Defaults to Discord's message content limit.
  */
-function batchLines(lines, maxLength = 2000) {
-  const chunks = [];
+export function batchLines(lines: string[], maxLength = 2000): string[] {
+  const chunks: string[] = [];
   let current = '';
   for (const line of lines) {
     const candidate = current ? `${current}\n${line}` : line;
@@ -73,40 +59,39 @@ function batchLines(lines, maxLength = 2000) {
   }
   return chunks;
 }
-module.exports.batchLines = batchLines;
+
+export interface WrapInCodeOptions {
+  maxLength?: number;
+  language?: string;
+  forceLine?: "single" | "multi";
+}
 
 /**
  * Wraps the given value in a code block. Might return a single or multi line code block dependong on usage.
- * @param {any} value The value to wrap in code. If it is not a string it will be serialized.
- * @param {{maxLength?: number, language?: string, forceLine?: "single" | "multi"}?} opts Additional options for formatting.
- * @returns {string} The formatted string.
+ * @param value The value to wrap in code. If it is not a string it will be serialized.
  */
-function wrapInCode(value, opts = null) {
+export function wrapInCode(value: unknown, opts: WrapInCodeOptions | null = null): string {
   let lang = opts?.language;
+  let str: string;
   if (value === undefined) {
-    value = 'undefined';
+    str = 'undefined';
   } else if (typeof value !== 'string') {
-    value = dbSerialize(value);
+    str = dbSerialize(value as object);
     if (!lang) {
       lang = 'json';
     }
-  }
-  value = maxLength(value, opts?.maxLength ?? 1500);
-  if (opts?.forceLine !== "single" && (opts?.forceLine === "multi" || value.includes('\n'))) {
-    return '```' + (lang ?? '') + '\n' + value + '\n```';
   } else {
-    return '`' + value + '`';
+    str = value;
+  }
+  str = maxLength(str, opts?.maxLength ?? 1500);
+  if (opts?.forceLine !== "single" && (opts?.forceLine === "multi" || str.includes('\n'))) {
+    return '```' + (lang ?? '') + '\n' + str + '\n```';
+  } else {
+    return '`' + str + '`';
   }
 }
-module.exports.wrapInCode = wrapInCode;
 
-/**
- * 
- * @param {import("./channel").ChannelInfo} value The channel info
- * @param {{excludeParent?: boolean}} opts Additional options for formatting.
- * @returns {string} The formatted string.
- */
-function channelInfoToString(value, opts = {}) {
+export function channelInfoToString(value: ChannelInfo | null | undefined, opts: { excludeParent?: boolean } = {}): string {
   if (!opts.excludeParent) {
     opts.excludeParent = false;
   }
@@ -118,17 +103,12 @@ function channelInfoToString(value, opts = {}) {
   }
   return `<#${value.id}> (${value.name})`;
 }
-module.exports.channelInfoToString = channelInfoToString;
 
-function booleanToString(value, yesIsBad = false, yesStr = 'Yes', noStr = 'No') {
+export function booleanToString(value: boolean, yesIsBad = false, yesStr = 'Yes', noStr = 'No'): string {
   return value ? (yesIsBad ? (':red_circle: ' + yesStr) : (':green_circle: ' + yesStr)) : (yesIsBad ? (':green_circle: ' + noStr) : (':red_circle: No' + noStr));
 }
-module.exports.booleanToString = booleanToString;
 
-/**
- * @param {string} ms 
- */
-function msToString(ms) {
+export function msToString(ms: number): string {
   if (ms < 0) ms = -ms;
   const dayMs = 86400000;
   const time = {
@@ -144,15 +124,8 @@ function msToString(ms) {
     .map(([key, val]) => `${val} ${key}${val !== 1 ? 's' : ''}`)
     .join(', ');
 }
-module.exports.msToString = msToString;
 
-/**
- * 
- * @param {any[] | false | null | undefined | string} list 
- * @param {string} emptyStr 
- * @returns {string}
- */
-function stringList(list, emptyStr = 'None', joinStr = ', ') {
+export function stringList(list: string[] | false | null | undefined | string, emptyStr = 'None', joinStr = ', '): string {
   if (!list) {
     return emptyStr;
   }
@@ -165,19 +138,16 @@ function stringList(list, emptyStr = 'None', joinStr = ', ') {
   }
   return filtered.join(joinStr);
 }
-module.exports.stringList = stringList;
 
-function ratioToString(value, total, digits = 2) {
+export function ratioToString(value: number, total: number, digits = 2): string {
   if (value === 0 || total === 0) {
     return (0).toFixed(digits) + '%';
   }
   return ((value / total) * 100).toFixed(digits) + '%';
 }
-module.exports.ratioToString = ratioToString;
 
-const COLOR = {
+export const COLOR = {
   RESET: '\x1b[0m',
   DIM: "\x1b[2m",
   FG_MAGENTA: "\x1b[35m"
-}
-module.exports.COLOR = COLOR;
+};

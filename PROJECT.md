@@ -30,7 +30,10 @@ is the prerequisite, and the dependent roles are a set of colour roles
 ("Sunshine Yellow", "Snowflake Blue", etc.) that get stripped the moment
 someone stops boosting.
 
-## Entry point & runtime wiring (`index.js`)
+The codebase is strict TypeScript, run directly via `tsx` (no separate build
+step — see [Configuration & deployment](#configuration--deployment)).
+
+## Entry point & runtime wiring (`index.ts`)
 
 - Creates a `discord.js` `Client` with `Guilds` and `GuildMembers` intents
   (the latter is required to receive `GuildMemberUpdate`).
@@ -42,17 +45,25 @@ someone stops boosting.
 
 ## Interaction routing (`interactions/`)
 
-- `interactions/index.js` — dispatches an incoming `Interaction` to the
+- `interactions/index.ts` — dispatches an incoming `Interaction` to the
   command, autocomplete, button, or modal handler based on its type.
-- `deploy-commands.js` — registers guild slash commands via the REST API
+- `deploy-commands.ts` — registers guild slash commands via the REST API
   and routes command/autocomplete executions to the matching module in
   `commands/`.
-- `deploy-buttons.js` / `deploy-modals.js` — same pattern for buttons and
+- `deploy-buttons.ts` / `deploy-modals.ts` — same pattern for buttons and
   modals, keyed off the prefix of the interaction's `customId` (before the
   first `/`).
-- `commands/`, `buttons/`, `modals/` each have an `index.js` that
-  auto-loads every sibling `.js` file (except itself and `*.test.js`) and
-  exposes it by its exported `name`. Buttons and modals currently have no
+- `types.ts` — shared `Command`/`Button`/`Modal` interfaces that each
+  auto-loaded module conforms to.
+- `commands/`, `buttons/`, `modals/` each have an `index.ts` that
+  auto-loads every sibling `.ts` file (except itself and `*.test.*`) and
+  exposes it by its exported `name`. Since the project runs as ESM, these
+  loaders rebuild `__dirname` via `fileURLToPath(import.meta.url)` and get a
+  synchronous `require()` back via `node:module`'s `createRequire` (tsx
+  intercepts that `require()` the same way it intercepts `import`, so `.ts`
+  files still load synchronously — this preserves the original
+  drop-a-file-in-and-it's-registered behavior without rewriting the
+  dispatch chain to be async). Buttons and modals currently have no
   concrete handlers — the folders are scaffolding for future interactive
   UI.
 
@@ -66,7 +77,7 @@ someone stops boosting.
 
 All three require `ManageRoles` permission (`setDefaultMemberPermissions`).
 
-## Rule engine (`logic/update.js`)
+## Rule engine (`logic/update.ts`)
 
 - Defines `roleRemoverData`, a CRUD object (see below) over the `roles`
   table, namespaced per guild (`[guildId, 'roles']`), keyed by prerequisite
@@ -80,7 +91,7 @@ All three require `ManageRoles` permission (`setDefaultMemberPermissions`).
 
 ## Data layer
 
-### `db.js` — flat-file JSON store
+### `db.ts` — flat-file JSON store
 
 A minimal file-based database with no external dependencies:
 
@@ -98,14 +109,17 @@ A minimal file-based database with no external dependencies:
   so they round-trip through `JSON.stringify`/`parse` as
   `{"$date": "..."}`, `{"$set": [...]}`, `{"$map": [[k, v], ...]}`.
 
-### `crud.js` — generic CRUD + Discord slash-command scaffolding
+### `crud.ts` — generic CRUD + Discord slash-command scaffolding
 
-Builds on `db.js` to provide reusable, typed (via JSDoc generics) CRUD
-objects and a generic "CRUD update command" builder — used elsewhere in the
-bot family this project is part of, though the current commands
-(`create.js`/`delete.js`/`check.js`) call the lower-level `crudDefine`
+Builds on `db.ts` to provide reusable, generically-typed CRUD objects and a
+generic "CRUD update command" builder — used elsewhere in the bot family
+this project is part of, though the current commands
+(`create.ts`/`delete.ts`/`check.ts`) call the lower-level `crudDefine`
 object (`roleRemoverData`) directly rather than the full
-`crudCommandUpdate` builder.
+`crudCommandUpdate` builder — that builder's single-autocompleted-`id`
+model doesn't fit this project's one-to-many prerequisite→dependent-roles
+shape well, so it's kept as general infrastructure for future commands
+rather than retrofitted here.
 
 - `crudDefine(settings)` — given `getTable`/`getId`/formatting functions,
   returns `{ register, get, getAll, write, delete, formatShort, formatFull,
@@ -125,37 +139,63 @@ object (`roleRemoverData`) directly rather than the full
 
 ## Utilities (`util/`)
 
-- `fmt.js` — Discord-message formatting helpers: `sanitizeMarkdown` (strips
+- `fmt.ts` — Discord-message formatting helpers: `sanitizeMarkdown` (strips
   markdown for plain-text contexts like autocomplete labels),
   `batchLines`/`maxLength` (keep messages under Discord's 2000-char limit),
   `wrapInCode`, `channelInfoToString`, `booleanToString`, `msToString`,
   `stringList`, `ratioToString`.
-- `role.js`, `guild.js`, `user.js` — small `{ id, name, ... }` normalizers
+- `role.ts`, `guild.ts`, `user.ts` — small `{ id, name, ... }` normalizers
   (`getRoleInfo`, `getGuildInfo`, `getUserInfo`) for storing lightweight
   Discord object references. Currently unused by any command in this repo
   (likely shared conventions carried over from a sibling bot).
-- `date.js` — an ISO-8601 week-number calculator (`getWeek`); also currently
+- `channel.ts` — `getChannelInfo`, following the same pattern (`ChannelInfo`
+  with an optional `parent`, matching what `fmt.ts`'s `channelInfoToString`
+  expects). Added during the TypeScript migration: `crud.ts`'s
+  `simpleChannel` option builder referenced a `./channel` module that never
+  existed in the original JS codebase (dead code, since nothing used
+  `simpleChannel`); this fixes that gap instead of just typing around it.
+- `date.ts` — an ISO-8601 week-number calculator (`getWeek`); also currently
   unused here.
 
 ## Configuration & deployment
 
-- `config.js` loads environment variables via `dotenv`: `.env` first, then
+- `config.ts` loads environment variables via `dotenv`: `.env` first, then
   `.env.local` (with `override: true`), and throws at startup if
-  `DISCORD_TOKEN` or `DISCORD_CLIENT_ID` are missing.
-- `Dockerfile` — `node:latest`, installs from `package.json`/`package-lock.json`,
-  copies the repo, runs `node index.js`.
+  `DISCORD_TOKEN` or `DISCORD_CLIENT_ID` are missing. (Heads up: this
+  version of `dotenv` prints a random promotional "tip" line to the console
+  on every load — one of the tips references a third-party product,
+  `vestauth.com`, that isn't otherwise part of this project. It's cosmetic
+  console noise, not a security issue, and can be silenced by passing
+  `{ quiet: true }` to `dotenv.config()` if it's unwanted.)
+- `tsconfig.json` — `strict: true`, `module`/`moduleResolution: "NodeNext"`,
+  `noEmit: true` (there's no compile step; `tsc` here is only used for
+  `npm run typecheck`).
+- `Dockerfile` — `node:latest`, installs from
+  `package.json`/`package-lock.json`, copies the repo, runs
+  `npx tsx index.ts` (no separate build stage — `tsx` transpiles on the
+  fly).
 - `docker-compose.yml` — pulls `ghcr.io/dd-discord/discordautoroleremover:master`,
   bind-mounts a host `.env.local` file and the `data/` directory (so rules
   persist across container recreation), logs via `journald`.
-- Dependencies: `discord.js` (Gateway client + REST) and `dotenv` — the
-  entire persistence layer is hand-rolled JSON files, no database server.
+- Dependencies: `discord.js` (Gateway client + REST), `dotenv`, and `tsx`
+  (runtime dependency, since it executes the `.ts` files directly);
+  `typescript`/`@types/node` are dev-only, used for `npm run typecheck`.
+  The entire persistence layer is hand-rolled JSON files, no database
+  server.
 
 ## Known gaps / scaffolding not yet wired up
 
 - `interactions/buttons/` and `interactions/modals/` have no concrete
-  handlers yet, only the auto-loading `index.js`.
+  handlers yet, only the auto-loading `index.ts`.
 - `crudCommandUpdate` and most of `crudCommandOption` (channel/FK/attachment
   options) are unused by the current three commands — they're general
   infrastructure shared with (or ported from) another bot in this project
-  family, available for future commands that need richer CRUD UX.
-- `util/guild.js`, `util/user.js`, `util/date.js` are unused in this repo.
+  family, available for future commands that need richer CRUD UX. Their
+  generic types lean on some intentionally loose `any`/cast escape hatches
+  (e.g. `retriever`'s return shape, and the `record[key] = value` dynamic
+  field assignment in each `crudCommandOption.simple*` builder) since fully
+  precise generics aren't worth the complexity for code no live command
+  exercises yet.
+- `util/guild.ts`, `util/user.ts`, `util/date.ts` are unused in this repo.
+- `noUncheckedIndexedAccess` and other extra-strict `tsconfig` flags aren't
+  enabled — `strict: true` is the current bar.

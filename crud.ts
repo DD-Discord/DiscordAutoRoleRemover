@@ -1,15 +1,23 @@
-const fs = require("fs");
-const path = require("path");
-const db = require("./db");
-const discord = require("discord.js");
-const { sanitizeMarkdown, batchLines } = require("./util/fmt");
+import fs from "fs";
+import path from "path";
+import {
+  EmbedBuilder,
+  AttachmentBuilder,
+  SlashCommandBuilder,
+  ChatInputCommandInteraction,
+  AutocompleteInteraction,
+  Attachment,
+  GuildBasedChannel,
+  Permissions,
+} from "discord.js";
+import { dbRegister, dbGet, dbGetAll, dbWrite, dbDelete, DbRecord, Table } from "./db.js";
+import { sanitizeMarkdown, batchLines } from "./util/fmt.js";
+import { getChannelInfo } from "./util/channel.js";
 
 /**
  * Deterministically derives an embed color from a string ID via FNV-1a hash -> hue.
- * @param {string} id The ID to hash.
- * @returns {number} A 24-bit RGB color.
  */
-function colorFromId(id) {
+function colorFromId(id: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < id.length; i++) {
     hash ^= id.charCodeAt(i);
@@ -19,41 +27,66 @@ function colorFromId(id) {
 
   // Fixed saturation/lightness keeps every color equally vivid and readable.
   const s = 0.65, l = 0.55;
-  const k = n => (n + hue / 30) % 12;
+  const k = (n: number) => (n + hue / 30) % 12;
   const a = s * Math.min(l, 1 - l);
-  const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
   return (Math.round(f(0) * 255) << 16) + (Math.round(f(8) * 255) << 8) + Math.round(f(4) * 255);
 }
 
 /**
  * Settings to define a CRUD object.
- * @template T
- * @template N
- * @typedef {Object} CrudSettings
- * @property {string} name The name of this record.
- * @property {string?} displayNameSingular The display name in singular.
- * @property {string?} displayNamePlural The display name in plural.
- * @property {(namespace: N) => Table} getTable Gets the table name.
- * @property {(record: T) => string} getId Gets the ID.
- * @property {(record: T?) => T?} migrate Migrates a record.
- * @property {((record: T, template: () => discord.EmbedBuilder) => discord.EmbedBuilder)?} formatFull Formats the record as an embed.
- * @property {((record: T) => string)?} formatShort Formats the record as a single-line string.
- * @property {((record: T) => discord.AttachmentBuilder[])?} getAttachments Gets files to send alongside the record's full embed (e.g. referenced via `attachment://name` in `formatFull`).
  */
+export interface CrudSettings<T extends DbRecord, N> {
+  /** The name of this record. */
+  name: string;
+  /** The display name in singular. */
+  displayNameSingular?: string;
+  /** The display name in plural. */
+  displayNamePlural?: string;
+  /** Gets the table name. */
+  getTable: (namespace: N) => Table;
+  /** Gets the ID. Defaults to `record.id` — override this if `T` doesn't have an `id` field. */
+  getId?: (record: T) => string;
+  /** Migrates a record. */
+  migrate?: (record: T | null) => T | null;
+  /** Formats the record as an embed. */
+  formatFull?: (record: T, template: () => EmbedBuilder) => EmbedBuilder;
+  /** Formats the record as a single-line string. */
+  formatShort?: (record: T) => string;
+  /** Gets files to send alongside the record's full embed (e.g. referenced via `attachment://name` in `formatFull`). */
+  getAttachments?: (record: T) => AttachmentBuilder[];
+}
 
 /**
- * @template T
- * @template N
- * @typedef {ReturnType<typeof crudDefine<T, N>>} Crud
+ * A defined CRUD namespace, as returned by {@link crudDefine}.
  */
+export interface Crud<T extends DbRecord, N> {
+  name: string;
+  /** Formats the display name for the given amount. */
+  displayName: (n?: number) => string;
+  displayNameSingular: string;
+  displayNamePlural: string;
+  /** Builds a short string. */
+  formatShort: (record: T) => string;
+  /** Builds a full embed. */
+  formatFull: (record: T) => EmbedBuilder;
+  /** Gets the files to send alongside the record's full embed. */
+  getAttachments: (record: T) => AttachmentBuilder[];
+  /** Gets the ID of a record. */
+  getId: (record: T) => string;
+  /** Registers the table for this CRUD namespace. */
+  register: (namespace: N) => void;
+  /** Gets a single record with the given ID. */
+  get: (namespace: N, id: string) => T | null;
+  /** Gets all records. */
+  getAll: (namespace: N) => T[];
+  /** Updates/creates a record. */
+  write: (namespace: N, record: T) => T;
+  /** Deletes a record. */
+  delete: (namespace: N, record: T) => void;
+}
 
-/**
- * @function
- * @template T
- * @template N
- * @param {CrudSettings<T, N>} crudSettings 
- */
-function crudDefine(crudSettings) {
+export function crudDefine<T extends DbRecord, N>(crudSettings: CrudSettings<T, N>): Crud<T, N> {
   if (!crudSettings.getTable) {
     throw new Error("Missing CRUD `getTable`.");
   }
@@ -62,172 +95,119 @@ function crudDefine(crudSettings) {
     throw new Error("Missing CRUD `name`.");
   }
 
-  if (!crudSettings.displayNameSingular) {
-    crudSettings.displayNameSingular = crudSettings.name[0].toUpperCase() + crudSettings.name.slice(1);
-  }
+  const displayNameSingular = crudSettings.displayNameSingular
+    ?? (crudSettings.name[0]!.toUpperCase() + crudSettings.name.slice(1));
 
-  if (!crudSettings.displayNamePlural) {
-    crudSettings.displayNamePlural = crudSettings.displayNameSingular + "s";
-  }
+  const displayNamePlural = crudSettings.displayNamePlural ?? (displayNameSingular + "s");
 
-  if (!crudSettings.migrate) {
-    crudSettings.migrate = record => record;
-  }
+  const migrate = crudSettings.migrate ?? ((record: T | null) => record);
 
-  if (!crudSettings.getId) {
-    crudSettings.getId = record => record.id;
-  }
+  // Assumes `T` has an `id` field when no explicit `getId` is provided — matches the
+  // original untyped default; every CRUD defined in this codebase supplies its own `getId`.
+  const getId = crudSettings.getId ?? ((record: T) => (record as unknown as { id: string }).id);
 
-  if (!crudSettings.formatShort) {
-    crudSettings.formatShort = record => `\`${crudSettings.getId(record)}\``;
-  }
+  const formatShort = crudSettings.formatShort ?? ((record: T) => `\`${getId(record)}\``);
 
-  const baseFmtFull = record => new discord.EmbedBuilder().setTitle(crudSettings.displayNameSingular).setDescription(crudSettings.formatShort(record)).setColor(colorFromId(crudSettings.getId(record))).setTimestamp(record.createdAt);
+  const baseFmtFull = (record: T) => new EmbedBuilder()
+    .setTitle(displayNameSingular)
+    .setDescription(formatShort(record))
+    .setColor(colorFromId(getId(record)))
+    .setTimestamp(record.createdAt);
 
-  if (!crudSettings.formatFull) {
-    crudSettings.formatFull = baseFmtFull;
-  }
+  const formatFull = crudSettings.formatFull ?? ((record: T, _template: () => EmbedBuilder) => baseFmtFull(record));
 
-  if (!crudSettings.getAttachments) {
-    crudSettings.getAttachments = () => [];
-  }
+  const getAttachments = crudSettings.getAttachments ?? (() => []);
 
   return {
     name: crudSettings.name,
-    /**
-     * Formats the display name for the given amount.
-     * @param {number} n The number
-     * @returns {string} The fitting display name.
-     */
-    displayName: (n = 0) => n > 1 ? crudSettings.displayNamePlural : `${n} ${crudSettings.displayNameSingular}`,
-    displayNameSingular: crudSettings.displayNameSingular,
-    displayNamePlural: crudSettings.displayNamePlural,
-    /**
-     * Builds a short string.
-     * @param {T} record The record.
-     * @returns {string} The string.
-     */
-    formatShort: record => crudSettings.formatShort(record),
-    /**
-     * Builds a full embed.
-     * @param {T} record The record.
-     * @returns {discord.EmbedBuilder} The embed.
-     */
-    formatFull: record => crudSettings.formatFull(record, () => baseFmtFull(record)),
-    /**
-     * Gets the files to send alongside the record's full embed.
-     * @param {T} record The record.
-     * @returns {discord.AttachmentBuilder[]} The attachments.
-     */
-    getAttachments: record => crudSettings.getAttachments(record),
-    /**
-     * Gets the ID of a record.
-     * @param {T} record The record.
-     * @returns {string} The ID.
-     */
-    getId: crudSettings.getId,
-    /**
-     * Registers the table for this CRUD namespace.
-     * @param {N} namespace The namespace.
-     */
-    register: function (namespace) {
+    displayName: (n = 0) => n > 1 ? displayNamePlural : `${n} ${displayNameSingular}`,
+    displayNameSingular,
+    displayNamePlural,
+    formatShort: (record: T) => formatShort(record),
+    formatFull: (record: T) => formatFull(record, () => baseFmtFull(record)),
+    getAttachments: (record: T) => getAttachments(record),
+    getId,
+    register: (namespace: N) => {
       const table = crudSettings.getTable(namespace);
-      db.dbRegister(table);
+      dbRegister(table);
     },
-    /**
-     * Gets a single record with the given ID.
-     * @param {N} namespace The namespace.
-     * @param {string} id The record ID.
-     * @returns {T?} The record, if found.
-     */
-    get: function (namespace, id) {
+    get: (namespace: N, id: string) => {
       const table = crudSettings.getTable(namespace);
-      const record = db.dbGet(table, id);
-      return crudSettings.migrate(record);
+      const record = dbGet<T>(table, id);
+      return migrate(record);
     },
-    /**
-     * Gets all records.
-     * @param {N} namespace The namespace.
-     * @returns {T[]} The records.
-     */
-    getAll: function (namespace) {
+    getAll: (namespace: N) => {
       const table = crudSettings.getTable(namespace);
-      const records = db.dbGetAll(table);
-      return records.map(crudSettings.migrate);
+      const records = dbGetAll<T>(table);
+      return records.map(record => migrate(record)!);
     },
-    /**
-     * Updates/creates a record.
-     * @param {N} namespace The namespace.
-     * @param {T} record The record to write.
-     * @returns The updated record.
-     */
-    write: function (namespace, record) {
-      record = crudSettings.migrate(record);
+    write: (namespace: N, record: T) => {
+      const migrated = migrate(record)!;
       const table = crudSettings.getTable(namespace);
-      const id = crudSettings.getId(record);
-      db.dbWrite(table, id, record);
-      return record;
+      const id = getId(migrated);
+      dbWrite(table, id, migrated);
+      return migrated;
     },
-    /**
-     * Deletes a record.
-     * @param {N} namespace The namespace.
-     * @param {T} record The record to write.
-     */
-    delete: function (namespace, record) {
-      record = crudSettings.migrate(record);
+    delete: (namespace: N, record: T) => {
+      const migrated = migrate(record)!;
       const table = crudSettings.getTable(namespace);
-      const id = crudSettings.getId(record);
-      db.dbDelete(table, id, record);
+      const id = getId(migrated);
+      dbDelete(table, id);
     },
-  }
+  };
 }
-module.exports.crudDefine = crudDefine;
 
 /**
  * Settings to define a CRUD update.
- * @template T
- * @template N
- * @typedef {Object} CrudCommandUpdateSettings
- * @property {string?} name The name of the command.
- * @property {string} description The command description.
- * @property {Crud<T, N>} crud The CRUD object.
- * @property {CrudCommandUpdateSettingsOption<T>[]} options The options.
- * @property {((builder: discord.SlashCommandBuilder) => void)?} factory An additional factory to further configure the command.
- * @property {(interaction: discord.ChatInputCommandInteraction) => T} getDefault Gets a default record.
- * @property {(interaction: discord.ChatInputCommandInteraction) => N} getNamespace Gets the namespace.
- * @property {boolean?} disableDelete No deleting.
- * @property {boolean?} disableUpdate No updating.
  */
+export interface CrudCommandUpdateSettings<T extends DbRecord, N> {
+  /** The name of the command. */
+  name?: string;
+  /** The command description. */
+  description: string;
+  /** The CRUD object. */
+  crud: Crud<T, N>;
+  /** The options. */
+  options: CrudCommandUpdateSettingsOption<T>[];
+  /** An additional factory to further configure the command. */
+  factory?: (builder: SlashCommandBuilder, settings: CrudCommandUpdateSettings<T, N>) => void;
+  /** Gets a default record. */
+  getDefault: (interaction: ChatInputCommandInteraction) => T;
+  /** Gets the namespace. */
+  getNamespace: (interaction: ChatInputCommandInteraction) => N;
+  /** No deleting. */
+  disableDelete?: boolean;
+  /** No updating. */
+  disableUpdate?: boolean;
+  defaultMemberPermissions?: Permissions | bigint | number | null;
+}
 
-/**
- * @template T
- * @typedef {Object} CrudCommandUpdateSettingsOption
- * @property {(builder: discord.SlashCommandBuilder) => void} factory
- * @property {string} name The option's name, used to route autocomplete requests.
- * @property {(interaction: discord.ChatInputCommandInteraction) => any | { value?: any, errors?: string[] }} retriever
- * @property {(value: any, record: T) => (void | Promise<void>)} updater
- * @property {boolean?} allowNullValues
- * @property {boolean?} allowRetrieverErrors
- * @property {((interaction: discord.AutocompleteInteraction) => Promise<void>)?} autocomplete Responds to an autocomplete request for this option.
- */
+export interface CrudCommandUpdateSettingsOption<T> {
+  factory: (builder: SlashCommandBuilder, option: CrudCommandUpdateSettingsOption<T>) => void;
+  /** The option's name, used to route autocomplete requests. */
+  name: string;
+  // The result is inherently either a raw value or `{ value?, errors? }` depending on
+  // `allowRetrieverErrors`, decided at runtime by the caller — kept loose intentionally,
+  // same rationale as db.ts's custom-type registry.
+  retriever: (interaction: ChatInputCommandInteraction) => any;
+  updater: (value: any, record: T) => void | Promise<void>;
+  allowNullValues?: boolean;
+  allowRetrieverErrors?: boolean;
+  /** Responds to an autocomplete request for this option. */
+  autocomplete?: (interaction: AutocompleteInteraction) => Promise<void>;
+}
 
 /**
  * Defines a CRUD update command.
- * @function
- * @template T
- * @template N
- * @param {CrudCommandUpdateSettings<T, N>} crudSettings 
  */
-function crudCommandUpdate(crudSettings) {
+export function crudCommandUpdate<T extends DbRecord, N>(crudSettings: CrudCommandUpdateSettings<T, N>) {
   if (!crudSettings.description) throw new Error("A command description is required");
   if (!crudSettings.crud) throw new Error("The CRUD object is required");
 
-  if (!crudSettings.name) {
-    crudSettings.name = crudSettings.crud.name;
-  }
+  const name = crudSettings.name ?? crudSettings.crud.name;
 
-  const builder = new discord.SlashCommandBuilder()
-    .setName(crudSettings.name)
+  const builder = new SlashCommandBuilder()
+    .setName(name)
     .setDescription(crudSettings.description)
     .setDefaultMemberPermissions(crudSettings.defaultMemberPermissions);
 
@@ -255,20 +235,16 @@ function crudCommandUpdate(crudSettings) {
     crudSettings.factory(builder, crudSettings);
   }
 
-  /**
-   * Executes the command.
-   * @param {discord.ChatInputCommandInteraction} interaction The command interaction.
-   */
-  async function execute(interaction) {
+  async function execute(interaction: ChatInputCommandInteraction) {
     // Get fixed options
     const id = interaction.options.getString("id", false);
     const deleteFlag = interaction.options.getBoolean("delete", false);
     const namespace = crudSettings.getNamespace(interaction);
-    const errors = [];
+    const errors: string[] = [];
 
     // Get records to update.
     let operationName = '';
-    const recordsToUpdate = [];
+    const recordsToUpdate: T[] = [];
     if (id === null) {
       const defaultRecord = crudSettings.getDefault(interaction);
       const defaultRecordId = crudSettings.crud.getId(defaultRecord);
@@ -319,7 +295,7 @@ function crudCommandUpdate(crudSettings) {
         ...recordsToUpdate.map(record => `- ${crudSettings.crud.formatShort(record)}`),
       ];
       const deleteBatches = batchLines(deleteLines);
-      await interaction.reply({ content: deleteBatches[0] });
+      await interaction.reply({ content: deleteBatches[0]! });
       for (const batch of deleteBatches.slice(1)) {
         await interaction.followUp({ content: batch });
       }
@@ -327,9 +303,9 @@ function crudCommandUpdate(crudSettings) {
     }
 
     // Update/Create records.
-    const optionsValueArray = [];
+    const optionsValueArray: any[] = [];
     for (let i = 0; i < crudSettings.options.length; i++) {
-      const option = crudSettings.options[i];
+      const option = crudSettings.options[i]!;
       const retrieved = option.retriever(interaction);
       const retrievedErrors = option.allowRetrieverErrors ? retrieved.errors : null;
       const retrievedValue = option.allowRetrieverErrors ? retrieved.value : retrieved;
@@ -348,7 +324,7 @@ function crudCommandUpdate(crudSettings) {
     // Perform patches.
     for (const record of recordsToUpdate) {
       for (let i = 0; i < crudSettings.options.length; i++) {
-        const option = crudSettings.options[i];
+        const option = crudSettings.options[i]!;
         const value = optionsValueArray[i];
         if (value !== null || option.allowNullValues) {
           await option.updater(value, record);
@@ -365,8 +341,8 @@ function crudCommandUpdate(crudSettings) {
     }
     return interaction.reply({
       content: `# ${crudSettings.crud.displayName(recordsToUpdate.length)} ${operationName}`,
-      embeds: recordsToUpdate.map(crudSettings.crud.formatFull),
-      files: recordsToUpdate.flatMap(crudSettings.crud.getAttachments),
+      embeds: recordsToUpdate.map(record => crudSettings.crud.formatFull(record)),
+      files: recordsToUpdate.flatMap(record => crudSettings.crud.getAttachments(record)),
     });
   }
 
@@ -375,17 +351,16 @@ function crudCommandUpdate(crudSettings) {
    * bulk-update syntax: only the last (currently-typed) segment gets matched, and
    * already-completed segments are carried through so picking a suggestion doesn't
    * erase them.
-   * @param {discord.AutocompleteInteraction} interaction The autocomplete interaction.
    */
-  async function idAutocomplete(interaction) {
-    const namespace = crudSettings.getNamespace(interaction);
+  async function idAutocomplete(interaction: AutocompleteInteraction) {
+    const namespace = crudSettings.getNamespace(interaction as unknown as ChatInputCommandInteraction);
     const raw = interaction.options.getFocused();
 
     const segments = raw.split(",");
     const prefix = segments.slice(0, -1).map(part => part.trim()).filter(part => part);
-    const query = segments[segments.length - 1].trim().toLowerCase();
+    const query = segments[segments.length - 1]!.trim().toLowerCase();
 
-    const choices = [];
+    const choices: { name: string, value: string }[] = [];
     if (prefix.length === 0 && "all".startsWith(query)) {
       choices.push({ name: `All ${crudSettings.crud.displayNamePlural}`, value: "all" });
     }
@@ -405,9 +380,8 @@ function crudCommandUpdate(crudSettings) {
 
   /**
    * Routes an autocomplete request to the focused option's handler.
-   * @param {discord.AutocompleteInteraction} interaction The autocomplete interaction.
    */
-  async function autocomplete(interaction) {
+  async function autocomplete(interaction: AutocompleteInteraction) {
     const focused = interaction.options.getFocused(true);
     if (focused.name === "id" && !crudSettings.disableUpdate) {
       return await idAutocomplete(interaction);
@@ -427,76 +401,53 @@ function crudCommandUpdate(crudSettings) {
     autocomplete,
   };
 }
-module.exports.crudCommandUpdate = crudCommandUpdate;
 
-const crudCommandOption = {
-  /**
-   * @function
-   * @template T
-   * @param {{ name: string, description: string, key?: keyof T }} crudSettings 
-   * @returns {CrudCommandUpdateSettingsOption<T>}
-   */
-  simpleString: function (crudSettings) {
-    if (!crudSettings.key) {
-      crudSettings.key = crudSettings.name;
-    }
+export const crudCommandOption = {
+  simpleString<T>(crudSettings: { name: string, description: string, key?: keyof T }): CrudCommandUpdateSettingsOption<T> {
+    const key = crudSettings.key ?? (crudSettings.name as keyof T);
 
     return {
       name: crudSettings.name,
       factory: builder => builder.addStringOption(option => option.setName(crudSettings.name).setDescription(crudSettings.description)),
       retriever: interaction => interaction.options.getString(crudSettings.name, false),
-      updater: (value, record) => record[crudSettings.key] = value,
+      updater: (value, record: T) => (record as Record<string, unknown>)[key as string] = value,
     };
   },
-  /**
-   * @function
-   * @template T
-   * @param {{ name: string, description: string, key?: keyof T }} crudSettings
-   * @returns {CrudCommandUpdateSettingsOption<T>}
-   */
-  simpleBoolean: function (crudSettings) {
-    if (!crudSettings.key) {
-      crudSettings.key = crudSettings.name;
-    }
+  simpleBoolean<T>(crudSettings: { name: string, description: string, key?: keyof T }): CrudCommandUpdateSettingsOption<T> {
+    const key = crudSettings.key ?? (crudSettings.name as keyof T);
     return {
       name: crudSettings.name,
       factory: builder => builder.addBooleanOption(option => option.setName(crudSettings.name).setDescription(crudSettings.description)),
       retriever: interaction => interaction.options.getBoolean(crudSettings.name, false),
-      updater: (value, record) => record[crudSettings.key] = value,
+      updater: (value, record: T) => (record as Record<string, unknown>)[key as string] = value,
     };
   },
-  /**
-   * @function
-   * @template T
-   * @param {{ name: string, description: string, key?: keyof T }} crudSettings 
-   * @returns {CrudCommandUpdateSettingsOption<T>}
-   */
-  simpleChannel: function (crudSettings) {
-    const channels = require("./channel");
-
-    if (!crudSettings.key) {
-      crudSettings.key = crudSettings.name;
-    }
+  simpleChannel<T>(crudSettings: { name: string, description: string, key?: keyof T }): CrudCommandUpdateSettingsOption<T> {
+    const key = crudSettings.key ?? (crudSettings.name as keyof T);
 
     return {
       name: crudSettings.name,
       factory: builder => builder.addChannelOption(option => option.setName(crudSettings.name).setDescription(crudSettings.description)),
       retriever: interaction => interaction.options.getChannel(crudSettings.name, false),
-      updater: (value, record) => record[crudSettings.key] = channels.getChannelInfo(value),
+      updater: (value: GuildBasedChannel, record: T) => {
+        (record as Record<string, unknown>)[key as string] = getChannelInfo(value);
+      },
     };
   },
   /**
-   * @function
-   * @template T
-   * @template F
-   * @template N
-   * @param {{ name: string, description: string, key?: keyof T, fkCrud: Crud<F, N>, getFkNamespace: (interaction: discord.ChatInputCommandInteraction) => N, useString?: boolean, required?: boolean }} crudSettings
-   * @returns {CrudCommandUpdateSettingsOption<T>}
+   * @param crudSettings.fkCrud The CRUD object of the foreign record.
+   * @param crudSettings.getFkNamespace Gets the namespace for the foreign CRUD lookup.
    */
-  simpleFk: function (crudSettings) {
-    if (!crudSettings.key) {
-      crudSettings.key = crudSettings.name;
-    }
+  simpleFk<T, F extends DbRecord, FN>(crudSettings: {
+    name: string,
+    description: string,
+    key?: keyof T,
+    fkCrud: Crud<F, FN>,
+    getFkNamespace: (interaction: ChatInputCommandInteraction) => FN,
+    useString?: boolean,
+    required?: boolean,
+  }): CrudCommandUpdateSettingsOption<T> {
+    const key = crudSettings.key ?? (crudSettings.name as keyof T);
 
     return {
       name: crudSettings.name,
@@ -514,11 +465,11 @@ const crudCommandOption = {
 
         return { value: crudSettings.fkCrud.getId(fkRecord) };
       },
-      updater: (value, record) => record[crudSettings.key] = value,
+      updater: (value, record: T) => (record as Record<string, unknown>)[key as string] = value,
       allowRetrieverErrors: true,
       autocomplete: crudSettings.useString ? undefined : async interaction => {
         const query = interaction.options.getFocused().toLowerCase();
-        const fkNamespace = crudSettings.getFkNamespace(interaction);
+        const fkNamespace = crudSettings.getFkNamespace(interaction as unknown as ChatInputCommandInteraction);
         const records = crudSettings.fkCrud.getAll(fkNamespace);
         const choices = records
           .filter(record => crudSettings.fkCrud.formatShort(record).toLowerCase().includes(query))
@@ -534,16 +485,16 @@ const crudCommandOption = {
   /**
    * A file attachment option. Downloads the uploaded file to `folder`, named after the
    * record's ID (via `crud.getId`), and stores the resulting local path under `key`.
-   * @function
-   * @template T
-   * @template N
-   * @param {{ name: string, description: string, key?: keyof T, crud: Crud<T, N>, folder: string, contentTypePrefix?: string }} crudSettings
-   * @returns {CrudCommandUpdateSettingsOption<T>}
    */
-  simpleAttachment: function (crudSettings) {
-    if (!crudSettings.key) {
-      crudSettings.key = crudSettings.name;
-    }
+  simpleAttachment<T extends DbRecord, N>(crudSettings: {
+    name: string,
+    description: string,
+    key?: keyof T,
+    crud: Crud<T, N>,
+    folder: string,
+    contentTypePrefix?: string,
+  }): CrudCommandUpdateSettingsOption<T> {
+    const key = crudSettings.key ?? (crudSettings.name as keyof T);
     fs.mkdirSync(crudSettings.folder, { recursive: true });
 
     return {
@@ -559,11 +510,11 @@ const crudCommandOption = {
         }
         return { value: attachment };
       },
-      updater: async (attachment, record) => {
+      updater: async (attachment: Attachment, record: T) => {
         const ext = path.extname(attachment.name);
         const filePath = path.join(crudSettings.folder, `${crudSettings.crud.getId(record)}${ext}`);
 
-        const oldPath = record[crudSettings.key];
+        const oldPath = (record as Record<string, unknown>)[key as string] as string | undefined;
         if (oldPath && oldPath !== filePath && fs.existsSync(oldPath)) {
           await fs.promises.unlink(oldPath);
         }
@@ -572,11 +523,9 @@ const crudCommandOption = {
         const buffer = Buffer.from(await response.arrayBuffer());
         await fs.promises.writeFile(filePath, buffer);
 
-        record[crudSettings.key] = filePath;
+        (record as Record<string, unknown>)[key as string] = filePath;
       },
       allowRetrieverErrors: true,
     };
   },
-}
-module.exports.crudCommandOption = crudCommandOption;
-
+};

@@ -13,4 +13,4 @@ RUN npm install
 COPY . /roleautoremover
 
 # Start me!
-CMD ["node", "index.js"]
+CMD ["npx", "tsx", "index.ts"]

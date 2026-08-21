@@ -1,7 +1,7 @@
-const dotenv = require("dotenv");
+import dotenv from "dotenv";
 
-dotenv.config();
-dotenv.config({ path: ".env.local", override: true });
+dotenv.config({ quiet: true });
+dotenv.config({ path: ".env.local", override: true, quiet: true });
 
 const { DISCORD_TOKEN, DISCORD_CLIENT_ID } = process.env;
 
@@ -9,7 +9,7 @@ if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID) {
   throw new Error("Missing environment variables");
 }
 
-module.exports = {
+export const config = {
   DISCORD_TOKEN,
   DISCORD_CLIENT_ID,
 };

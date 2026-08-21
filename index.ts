@@ -1,7 +1,7 @@
-const { Client, GatewayIntentBits, Events } = require("discord.js");
-const interactions = require("./interactions");
-const config = require("./config");
-const { maybeUpdateRoles, roleRemoverData } = require("./logic/update");
+import { Client, GatewayIntentBits, Events, Guild } from "discord.js";
+import * as interactions from "./interactions/index.js";
+import { config } from "./config.js";
+import { maybeUpdateRoles, roleRemoverData } from "./logic/update.js";
 
 const client = new Client({
   intents: [
@@ -14,7 +14,7 @@ client.once(Events.ClientReady, () => {
   console.log("Discord bot is ready! 🤖");
 });
 
-async function setupGuild(guild) {
+async function setupGuild(guild: Guild): Promise<void> {
   roleRemoverData.register({ guildId: guild.id })
   await interactions.deploy({ guildId: guild.id });
 }

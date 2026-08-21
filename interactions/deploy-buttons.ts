@@ -1,13 +1,10 @@
-const { ButtonInteraction } = require("discord.js");
-const { buttons } = require("./buttons");
+import { ButtonInteraction } from "discord.js";
+import { buttons } from "./buttons/index.js";
 
-/**
- * @param {ButtonInteraction} interaction
- */
-module.exports.handleButton = async function handleButton(interaction) {
+export async function handleButton(interaction: ButtonInteraction): Promise<boolean> {
   try {
     const { customId } = interaction;
-    const buttonName = customId.split('/')[0];
+    const buttonName = customId.split('/')[0]!;
     console.log("Handle button %s (%s) in %s", buttonName, customId, interaction.guildId)
     if (buttons[buttonName]) {
       await buttons[buttonName].execute(interaction);
