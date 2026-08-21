@@ -1,7 +1,7 @@
 const { Client, GatewayIntentBits, Events } = require("discord.js");
 const interactions = require("./interactions");
 const config = require("./config");
-const { maybeUpdateRoles } = require("./logic/update");
+const { maybeUpdateRoles, roleRemoverData } = require("./logic/update");
 
 const client = new Client({
   intents: [
@@ -15,6 +15,7 @@ client.once(Events.ClientReady, () => {
 });
 
 async function setupGuild(guild) {
+  roleRemoverData.register({ guildId: guild.id })
   await interactions.deploy({ guildId: guild.id });
 }
 

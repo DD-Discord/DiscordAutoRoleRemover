@@ -1,5 +1,7 @@
 const { CommandInteraction, SlashCommandBuilder, Role, PermissionFlagsBits } = require("discord.js");
+const discord = require("discord.js");
 const { dbGet, dbWrite, dbDelete } = require("../../db");
+const { roleRemoverData } = require("../../logic/update");
 
 module.exports.name = "role-remover-delete";
 
@@ -19,19 +21,16 @@ module.exports.data = new SlashCommandBuilder()
     return option;
   })
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles);
-    
 
 /**
- * @param {CommandInteraction} interaction
+ * @param {discord.ChatInputCommandInteraction} interaction
  */
 module.exports.execute = async function(interaction) {
   // Get settings
-  /** @type {Role} */
   const optWhen = interaction.options.getRole("when");
-  /** @type {Role} */
   const optRemove = interaction.options.getRole("remove");
 
-  const settings = dbGet("roles", optWhen.id);
+  const settings = roleRemoverData.get(interaction, optWhen.id);
   if (!settings) {
     return interaction.reply({
       content: "No auto remove settings for this role.",
@@ -42,12 +41,12 @@ module.exports.execute = async function(interaction) {
   delete settings.remove[optRemove.id];
   // Done
   if (Object.keys(settings.remove).length === 0) {
-    dbDelete("roles", optWhen.id);
+    roleRemoverData.delete(interaction, optWhen.id);
     return interaction.reply({
       content: `Disabled all role removal for <@&${optWhen.id}>.`,
     });
   } else {
-    dbWrite("roles", optWhen.id, settings)
+    roleRemoverData.write(interaction, settings);
     return interaction.reply({
       content: `Will no longer automatically remove role <@&${optRemove.id}> from members without <@&${optWhen.id}>.`,
     });

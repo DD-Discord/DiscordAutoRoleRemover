@@ -1,5 +1,7 @@
 const { CommandInteraction, SlashCommandBuilder, Role, PermissionFlagsBits } = require("discord.js");
+const discord = require("discord.js");
 const { dbGet, dbWrite } = require("../../db");
+const { roleRemoverData } = require("../../logic/update");
 
 module.exports.name = "role-remover-create";
 
@@ -19,20 +21,17 @@ module.exports.data = new SlashCommandBuilder()
     return option;
   })
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles);
-    
 
 /**
- * @param {CommandInteraction} interaction
+ * @param {discord.ChatInputCommandInteraction} interaction
  */
 module.exports.execute = async function(interaction) {
   // Get settings
-  /** @type {Role} */
   const optWhen = interaction.options.getRole("when");
-  /** @type {Role} */
   const optRemove = interaction.options.getRole("remove");
   const guildId = interaction.guildId;
 
-  let roles = dbGet("roles", optWhen.id);
+  let roles = roleRemoverData.get(interaction, optWhen.id)
   if (roles === null) {
     roles = {}
     roles.roleId = optWhen.id;
@@ -46,7 +45,7 @@ module.exports.execute = async function(interaction) {
     removeName: optRemove.name,
   };
 
-  dbWrite("roles", optWhen.id, roles)
+  roleRemoverData.write(interaction, roles);
   
   // Done
   return interaction.reply({

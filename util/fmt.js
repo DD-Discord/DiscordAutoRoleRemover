@@ -1,4 +1,4 @@
-const { dbSerialize } = require("./db");
+const { dbSerialize } = require("../db");
 
 const WHITESPACE_REGEX = /\s+/g;
 
@@ -36,11 +36,12 @@ module.exports.sanitizeMarkdown = sanitizeMarkdown;
 /**
  * @param {string} value 
  * @param {number} maxLength 
+ * @param {string} ellipsis 
  */
-function maxLength(value, maxLength) {
+function maxLength(value, maxLength, ellipsis = ' […]') {
   if (value.length > maxLength) {
-    value = value.substring(0, maxLength);
-    value += ' […]';
+    value = value.substring(0, maxLength - ellipsis.length);
+    value += ellipsis;
   }
   return value;
 }
