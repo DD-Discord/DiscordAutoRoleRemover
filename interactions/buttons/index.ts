@@ -1,17 +1,15 @@
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
-import { createRequire } from "module";
+import { fileURLToPath, pathToFileURL } from "url";
 import { Button } from "../types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const require = createRequire(import.meta.url);
 
 export const buttons: Record<string, Button> = {};
 
 const basename = path.basename(__filename);
-fs
+const files = fs
   .readdirSync(__dirname)
   .filter(file => {
     return (
@@ -20,9 +18,11 @@ fs
       (file.endsWith('.ts') || file.endsWith('.js')) &&
       file.indexOf('.test.') === -1
     );
-  })
-  .forEach(file => {
-    const button: Button = require(path.join(__dirname, file));
-    console.log('Found button', button)
-    buttons[button.name] = button;
   });
+
+// See commands/index.ts for why dynamic import() (not require()) is used here.
+await Promise.all(files.map(async file => {
+  const button: Button = await import(pathToFileURL(path.join(__dirname, file)).href);
+  console.log('Found button', button)
+  buttons[button.name] = button;
+}));

@@ -33,7 +33,6 @@ function tableCache(table: Table): Record<string, unknown> {
   const str = tableToStr(table);
   const tableCache = cache[str];
   if (!tableCache) {
-    console.error(cache)
     throw new Error(`The table '${str}' has not been registered.`);
   }
   return tableCache;
@@ -56,7 +55,7 @@ export function dbRegister(table: Table): void {
     console.log('Created table', table, dir);
   }
   cache[tableToStr(table)] = {};
-  console.log('Registered table', table, cache)
+  console.log('Registered table', table)
 }
 
 /**

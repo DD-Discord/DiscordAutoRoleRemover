@@ -1,17 +1,15 @@
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
-import { createRequire } from "module";
+import { fileURLToPath, pathToFileURL } from "url";
 import { Modal } from "../types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const require = createRequire(import.meta.url);
 
 export const modals: Record<string, Modal> = {};
 
 const basename = path.basename(__filename);
-fs
+const files = fs
   .readdirSync(__dirname)
   .filter(file => {
     return (
@@ -20,9 +18,11 @@ fs
       (file.endsWith('.ts') || file.endsWith('.js')) &&
       file.indexOf('.test.') === -1
     );
-  })
-  .forEach(file => {
-    const modal: Modal = require(path.join(__dirname, file));
-    console.log('Found modal', modal)
-    modals[modal.name] = modal;
   });
+
+// See commands/index.ts for why dynamic import() (not require()) is used here.
+await Promise.all(files.map(async file => {
+  const modal: Modal = await import(pathToFileURL(path.join(__dirname, file)).href);
+  console.log('Found modal', modal)
+  modals[modal.name] = modal;
+}));

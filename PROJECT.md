@@ -58,14 +58,22 @@ step — see [Configuration & deployment](#configuration--deployment)).
 - `commands/`, `buttons/`, `modals/` each have an `index.ts` that
   auto-loads every sibling `.ts` file (except itself and `*.test.*`) and
   exposes it by its exported `name`. Since the project runs as ESM, these
-  loaders rebuild `__dirname` via `fileURLToPath(import.meta.url)` and get a
-  synchronous `require()` back via `node:module`'s `createRequire` (tsx
-  intercepts that `require()` the same way it intercepts `import`, so `.ts`
-  files still load synchronously — this preserves the original
-  drop-a-file-in-and-it's-registered behavior without rewriting the
-  dispatch chain to be async). Buttons and modals currently have no
-  concrete handlers — the folders are scaffolding for future interactive
-  UI.
+  loaders rebuild `__dirname` via `fileURLToPath(import.meta.url)` and load
+  each file via dynamic `import()` (converted to a `file://` URL via
+  `pathToFileURL`, since Node's ESM loader rejects raw OS paths) behind a
+  top-level `await Promise.all(...)`. Everything that imports the loader
+  (`deploy-commands.ts` etc.) transparently waits for that top-level await
+  as part of normal ESM module linking, so the rest of the app still sees a
+  plain, already-populated `commands`/`buttons`/`modals` object — no
+  downstream code had to become async.
+  **Do not switch this back to `require()`/`createRequire`**: mixing
+  `require()` and `import()` for the same files loads two separate module
+  instances with two separate copies of any module-level state (this
+  actually happened here — `db.ts`'s in-memory table cache got split in two,
+  since `index.ts` registered a table on the `import`-graph instance while a
+  command loaded via `require()` read from an unregistered, never-touched
+  instance). Buttons and modals currently have no concrete handlers — the
+  folders are scaffolding for future interactive UI.
 
 ### Commands (`interactions/commands/`)
 
