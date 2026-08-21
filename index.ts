@@ -1,7 +1,11 @@
 import { Client, GatewayIntentBits, Events, Guild } from "discord.js";
 import * as interactions from "./interactions/index.js";
 import { config } from "./config.js";
-import { maybeUpdateRoles, roleRemoverData } from "./logic/update.js";
+import { maybeUpdateRoles } from "./logic/update.js";
+import { rolePoolData } from "./logic/rolePool.js";
+import { prerequisiteRuleData } from "./logic/prerequisite.js";
+import { conflictRuleData } from "./logic/conflict.js";
+import { poolCapRuleData } from "./logic/poolCap.js";
 
 const client = new Client({
   intents: [
@@ -15,7 +19,10 @@ client.once(Events.ClientReady, () => {
 });
 
 async function setupGuild(guild: Guild): Promise<void> {
-  roleRemoverData.register({ guildId: guild.id })
+  rolePoolData.register({ guildId: guild.id });
+  prerequisiteRuleData.register({ guildId: guild.id });
+  conflictRuleData.register({ guildId: guild.id });
+  poolCapRuleData.register({ guildId: guild.id });
   await interactions.deploy({ guildId: guild.id });
 }
 

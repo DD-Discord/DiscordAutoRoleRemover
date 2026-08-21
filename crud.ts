@@ -211,6 +211,14 @@ export function crudCommandUpdate<T extends DbRecord, N>(crudSettings: CrudComma
     .setDescription(crudSettings.description)
     .setDefaultMemberPermissions(crudSettings.defaultMemberPermissions);
 
+  // Discord requires required options to precede non-required ones. `id` and
+  // `delete` are always optional by design, so the caller's own options -
+  // which may be required - must be added first; the caller is responsible
+  // for ordering required-before-optional within their own `options` array.
+  for (const option of crudSettings.options) {
+    option.factory(builder, option);
+  }
+
   if (!crudSettings.disableUpdate) {
     builder.addStringOption(option => {
       option.setName("id");
@@ -225,10 +233,6 @@ export function crudCommandUpdate<T extends DbRecord, N>(crudSettings: CrudComma
       option.setDescription(`If set, the ${crudSettings.crud.displayNamePlural} will be deleted.`);
       return option;
     });
-  }
-
-  for (const option of crudSettings.options) {
-    option.factory(builder, option);
   }
 
   if (crudSettings.factory) {
@@ -402,36 +406,84 @@ export function crudCommandUpdate<T extends DbRecord, N>(crudSettings: CrudComma
   };
 }
 
+/**
+ * Builds an autocomplete handler that searches another CRUD's records by their
+ * `formatShort` label, capped at Discord's 25-choice limit. Shared by
+ * `crudCommandOption.simpleFk` and by any hand-rolled command that needs a
+ * "pick an existing record from this CRUD" option.
+ */
+export function crudAutocomplete<F extends DbRecord, FN>(
+  fkCrud: Crud<F, FN>,
+  getNamespace: (interaction: AutocompleteInteraction) => FN,
+): (interaction: AutocompleteInteraction) => Promise<void> {
+  return async interaction => {
+    const query = interaction.options.getFocused().toLowerCase();
+    const namespace = getNamespace(interaction);
+    const records = fkCrud.getAll(namespace);
+    const choices = records
+      .filter(record => fkCrud.formatShort(record).toLowerCase().includes(query))
+      .slice(0, 25)
+      .map(record => ({
+        name: sanitizeMarkdown(fkCrud.formatShort(record)).slice(0, 100),
+        value: fkCrud.getId(record),
+      }));
+    await interaction.respond(choices);
+  };
+}
+
 export const crudCommandOption = {
-  simpleString<T>(crudSettings: { name: string, description: string, key?: keyof T }): CrudCommandUpdateSettingsOption<T> {
+  simpleString<T>(crudSettings: { name: string, description: string, key?: keyof T, required?: boolean }): CrudCommandUpdateSettingsOption<T> {
     const key = crudSettings.key ?? (crudSettings.name as keyof T);
 
     return {
       name: crudSettings.name,
-      factory: builder => builder.addStringOption(option => option.setName(crudSettings.name).setDescription(crudSettings.description)),
-      retriever: interaction => interaction.options.getString(crudSettings.name, false),
+      factory: builder => builder.addStringOption(option => option.setName(crudSettings.name).setDescription(crudSettings.description).setRequired(!!crudSettings.required)),
+      retriever: interaction => interaction.options.getString(crudSettings.name, !!crudSettings.required),
       updater: (value, record: T) => (record as Record<string, unknown>)[key as string] = value,
     };
   },
-  simpleBoolean<T>(crudSettings: { name: string, description: string, key?: keyof T }): CrudCommandUpdateSettingsOption<T> {
+  simpleBoolean<T>(crudSettings: { name: string, description: string, key?: keyof T, required?: boolean }): CrudCommandUpdateSettingsOption<T> {
     const key = crudSettings.key ?? (crudSettings.name as keyof T);
     return {
       name: crudSettings.name,
-      factory: builder => builder.addBooleanOption(option => option.setName(crudSettings.name).setDescription(crudSettings.description)),
-      retriever: interaction => interaction.options.getBoolean(crudSettings.name, false),
+      factory: builder => builder.addBooleanOption(option => option.setName(crudSettings.name).setDescription(crudSettings.description).setRequired(!!crudSettings.required)),
+      retriever: interaction => interaction.options.getBoolean(crudSettings.name, !!crudSettings.required),
       updater: (value, record: T) => (record as Record<string, unknown>)[key as string] = value,
     };
   },
-  simpleChannel<T>(crudSettings: { name: string, description: string, key?: keyof T }): CrudCommandUpdateSettingsOption<T> {
+  simpleChannel<T>(crudSettings: { name: string, description: string, key?: keyof T, required?: boolean }): CrudCommandUpdateSettingsOption<T> {
     const key = crudSettings.key ?? (crudSettings.name as keyof T);
 
     return {
       name: crudSettings.name,
-      factory: builder => builder.addChannelOption(option => option.setName(crudSettings.name).setDescription(crudSettings.description)),
-      retriever: interaction => interaction.options.getChannel(crudSettings.name, false),
+      factory: builder => builder.addChannelOption(option => option.setName(crudSettings.name).setDescription(crudSettings.description).setRequired(!!crudSettings.required)),
+      retriever: interaction => interaction.options.getChannel(crudSettings.name, !!crudSettings.required),
       updater: (value: GuildBasedChannel, record: T) => {
         (record as Record<string, unknown>)[key as string] = getChannelInfo(value);
       },
+    };
+  },
+  simpleChoice<T>(crudSettings: { name: string, description: string, key?: keyof T, choices: { name: string, value: string }[], required?: boolean }): CrudCommandUpdateSettingsOption<T> {
+    const key = crudSettings.key ?? (crudSettings.name as keyof T);
+    return {
+      name: crudSettings.name,
+      factory: builder => builder.addStringOption(option => option.setName(crudSettings.name).setDescription(crudSettings.description).addChoices(...crudSettings.choices).setRequired(!!crudSettings.required)),
+      retriever: interaction => interaction.options.getString(crudSettings.name, !!crudSettings.required),
+      updater: (value, record: T) => (record as Record<string, unknown>)[key as string] = value,
+    };
+  },
+  simpleNumber<T>(crudSettings: { name: string, description: string, key?: keyof T, min?: number, max?: number, required?: boolean }): CrudCommandUpdateSettingsOption<T> {
+    const key = crudSettings.key ?? (crudSettings.name as keyof T);
+    return {
+      name: crudSettings.name,
+      factory: builder => builder.addIntegerOption(option => {
+        option.setName(crudSettings.name).setDescription(crudSettings.description).setRequired(!!crudSettings.required);
+        if (crudSettings.min !== undefined) option.setMinValue(crudSettings.min);
+        if (crudSettings.max !== undefined) option.setMaxValue(crudSettings.max);
+        return option;
+      }),
+      retriever: interaction => interaction.options.getInteger(crudSettings.name, !!crudSettings.required),
+      updater: (value, record: T) => (record as Record<string, unknown>)[key as string] = value,
     };
   },
   /**
@@ -467,19 +519,10 @@ export const crudCommandOption = {
       },
       updater: (value, record: T) => (record as Record<string, unknown>)[key as string] = value,
       allowRetrieverErrors: true,
-      autocomplete: crudSettings.useString ? undefined : async interaction => {
-        const query = interaction.options.getFocused().toLowerCase();
-        const fkNamespace = crudSettings.getFkNamespace(interaction as unknown as ChatInputCommandInteraction);
-        const records = crudSettings.fkCrud.getAll(fkNamespace);
-        const choices = records
-          .filter(record => crudSettings.fkCrud.formatShort(record).toLowerCase().includes(query))
-          .slice(0, 25)
-          .map(record => ({
-            name: sanitizeMarkdown(crudSettings.fkCrud.formatShort(record)).slice(0, 100),
-            value: crudSettings.fkCrud.getId(record),
-          }));
-        await interaction.respond(choices);
-      },
+      autocomplete: crudSettings.useString ? undefined : crudAutocomplete(
+        crudSettings.fkCrud,
+        interaction => crudSettings.getFkNamespace(interaction as unknown as ChatInputCommandInteraction),
+      ),
     };
   },
   /**

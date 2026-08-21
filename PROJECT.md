@@ -1,45 +1,57 @@
 # Discord Role Auto Remover
 
-A Discord bot that removes a member's "dependent" roles as soon as a
-"prerequisite" role is taken away from them.
-
-It was originally built to strip a Server Booster's custom colour role the
-moment they stop boosting, but the rule engine is generic: any role can be
-configured as a prerequisite for the removal of any number of other roles.
-
-## How it works
-
-1. An admin runs `/role-remover-create` and picks two roles: `when` (the
-   prerequisite) and `remove` (the dependent role to strip).
-2. This is stored as one record per prerequisite role, per guild, containing
-   a map of all dependent roles configured for it.
-3. The bot listens for `GuildMemberUpdate`. Whenever a member's roles change,
-   it checks every configured prerequisite role for that guild:
-   - If the member still has the prerequisite role, nothing happens.
-   - If the member never had it either, nothing happens (avoids acting on
-     unrelated role changes).
-   - If the member just lost the prerequisite role, the bot removes every
-     dependent role in that record's `remove` map that the member currently
-     holds.
-4. `/role-remover-check` lists all configured rules; `/role-remover-delete`
-   removes a single dependent-role link (or the whole rule if no links are
-   left).
-
-Example (from `data/<guildId>/roles/<roleId>.json`): the Server Booster role
-is the prerequisite, and the dependent roles are a set of colour roles
-("Sunshine Yellow", "Snowflake Blue", etc.) that get stripped the moment
-someone stops boosting.
+A Discord bot that enforces role rules a moderator can't easily police by
+hand: it watches every member's roles and reacts when they end up in a
+configured "bad" state. It was originally built to strip a Server Booster's
+custom colour role the moment they stop boosting; that's now just the
+simplest instance of a small rule engine with three rule types, all built
+on a shared "role pool" concept.
 
 The codebase is strict TypeScript, run directly via `tsx` (no separate build
 step — see [Configuration & deployment](#configuration--deployment)).
+
+## The rule engine
+
+Everything is built on **role pools** — named, reusable sets of role IDs
+(`logic/rolePool.ts`). Pools are deliberately not abstracted away for the
+simple case: even a single-role condition (like "is boosting") is just a
+pool with one role in it. Three rule types reference pools:
+
+1. **Prerequisite rules** (`logic/prerequisite.ts`) — if a member loses
+   their last role from a *trigger pool*, strip whatever roles they hold
+   from a *remove pool*. This is the original Booster→colours behavior,
+   generalized.
+2. **Conflict rules** (`logic/conflict.ts`) — 2+ pools that are mutually
+   exclusive; if a member ends up with roles from 2+ of them at once,
+   that's a conflict. **Alert-only** — there's no tie-break rule for which
+   pool should "win," so this rule type doesn't offer auto-fix at all.
+3. **Pool cap rules** (`logic/poolCap.ts`) — a single pool with a
+   max-allowed count; if a member holds more than that, that's an
+   overflow. Auto-fix is only unambiguous when the cap is `0` (remove
+   everything — no subset choice to make); any overflow above a cap of `0`
+   always alerts instead, regardless of the rule's configured action,
+   since there's no rule for which extra role(s) to drop.
+
+Prerequisite and pool-cap rules share a `RuleOutcome` (`logic/outcome.ts`):
+`action: 'fix' | 'alert'` plus an `alertChannel`, which is **always
+required** even in `fix` mode — an ambiguous pool-cap overflow falls back
+to alerting no matter how the rule is configured, so there must always be
+somewhere to send that fallback alert.
+
+All three checks run on every `GuildMemberUpdate`, dispatched from
+`logic/update.ts` (now a thin orchestrator — see below) and only act on
+transitions (a role just lost, a count that just increased), never on
+every subsequent unrelated role change while a violation persists — this
+avoids re-alerting or re-processing on every unrelated role edit.
 
 ## Entry point & runtime wiring (`index.ts`)
 
 - Creates a `discord.js` `Client` with `Guilds` and `GuildMembers` intents
   (the latter is required to receive `GuildMemberUpdate`).
 - On `GuildAvailable` (guilds the bot is already in) and `GuildCreate`
-  (newly joined guilds), it registers the `roles` DB table for that guild
-  and re-deploys slash commands to it.
+  (newly joined guilds), registers all four DB tables (pools,
+  prerequisites, conflicts, caps) for that guild and re-deploys slash
+  commands to it.
 - On `GuildMemberUpdate`, delegates to `maybeUpdateRoles`.
 - On `InteractionCreate`, delegates to the generic interaction router.
 
@@ -77,25 +89,28 @@ step — see [Configuration & deployment](#configuration--deployment)).
 
 ### Commands (`interactions/commands/`)
 
-| Command | Purpose |
-|---|---|
-| `role-remover-create` | Adds a `when` → `remove` link (creates or updates the rule for the `when` role). |
-| `role-remover-delete` | Removes a single `when` → `remove` link; deletes the whole rule once its last link is gone. |
-| `role-remover-check` | Lists all configured rules and their dependent roles in the guild. |
+8 top-level commands, `ManageRoles`-gated. Four are built via `crud.ts`'s
+`crudCommandUpdate` (declarative — an `id` option selects an existing
+record to edit/view, omitting it creates new, a `delete` boolean flag
+removes it, `id:all` bulk-applies); four are hand-rolled because Discord
+has no multi-select option type, so growing a pool's/conflict-rule's list
+field needs one-role/one-pool-at-a-time commands.
 
-All three require `ManageRoles` permission (`setDefaultMemberPermissions`).
+| Command | Built via | Purpose |
+|---|---|---|
+| `role-pool` | `crudCommandUpdate` | Create/edit/delete/list role pools (`name` field only — membership below). |
+| `role-pool-add-role` | hand-rolled | Adds one role to a pool. |
+| `role-pool-remove-role` | hand-rolled | Removes one role from a pool. |
+| `role-prereq` | `crudCommandUpdate` | Create/edit/delete/list prerequisite rules (trigger pool, remove pool, outcome, channel). |
+| `role-conflict` | `crudCommandUpdate` | Create/edit/delete/list conflict rules (name, alert channel — pool list below). |
+| `role-conflict-add-pool` | hand-rolled | Adds one pool to a conflict rule. |
+| `role-conflict-remove-pool` | hand-rolled | Removes one pool from a conflict rule. |
+| `role-cap` | `crudCommandUpdate` | Create/edit/delete/list pool cap rules (pool, max allowed, outcome, channel). |
 
-## Rule engine (`logic/update.ts`)
-
-- Defines `roleRemoverData`, a CRUD object (see below) over the `roles`
-  table, namespaced per guild (`[guildId, 'roles']`), keyed by prerequisite
-  role ID.
-- `maybeUpdateRoles(oldMember, newMember)` is the core check described
-  above. It reads all rules for the member's guild directly via
-  `db.dbGetAll("roles")` (not through the CRUD wrapper) and removes
-  qualifying roles with an audit-log reason of `"Auto remover: <role name>"`.
-  Failures to remove a single role are logged and don't abort the rest of
-  the loop.
+**Important convention for any future `crudCommandUpdate` command**: pass
+an explicit kebab-case `name` — it defaults to the CRUD object's own
+`.name` (e.g. `'prerequisite rule'`), which contains a space and isn't a
+valid Discord command name.
 
 ## Data layer
 
@@ -111,7 +126,12 @@ A minimal file-based database with no external dependencies:
 - Each table keeps an **in-memory cache**; `dbGet`/`dbGetAll` populate it
   lazily from disk, `dbWrite`/`dbDelete` keep it in sync.
 - A table must be `dbRegister`'d (which also `mkdir`s its directory) before
-  it can be read or written — done once per guild in `index.js`.
+  it can be read or written — done once per guild in `index.ts`, for all
+  four tables.
+- Always query through a CRUD's own `getAll`/`get` (namespaced,
+  e.g. `prerequisiteRuleData.getAll({ guildId })`), never a raw
+  `dbGetAll("tablename")` with a flat string — see "A bug this uncovered"
+  above for what goes wrong otherwise.
 - **Custom type serialization**: `Date`, `Set`, and `Map` values are
   (de)serialized through a small replacer/reviver registry (`customTypes`)
   so they round-trip through `JSON.stringify`/`parse` as
@@ -120,14 +140,13 @@ A minimal file-based database with no external dependencies:
 ### `crud.ts` — generic CRUD + Discord slash-command scaffolding
 
 Builds on `db.ts` to provide reusable, generically-typed CRUD objects and a
-generic "CRUD update command" builder — used elsewhere in the bot family
-this project is part of, though the current commands
-(`create.ts`/`delete.ts`/`check.ts`) call the lower-level `crudDefine`
-object (`roleRemoverData`) directly rather than the full
-`crudCommandUpdate` builder — that builder's single-autocompleted-`id`
-model doesn't fit this project's one-to-many prerequisite→dependent-roles
-shape well, so it's kept as general infrastructure for future commands
-rather than retrofitted here.
+generic "CRUD update command" builder. `crudCommandUpdate` sat unused since
+the TypeScript migration; the pool/prerequisite/conflict/cap rule types are
+its first real caller, and that exercise surfaced (and fixed) a real bug:
+the builder used to add its own optional `id`/`delete` options *before* the
+caller's options, which breaks the moment a caller has any required option
+of its own (Discord requires required options before non-required ones).
+Fixed by adding the caller's `options` first.
 
 - `crudDefine(settings)` — given `getTable`/`getId`/formatting functions,
   returns `{ register, get, getAll, write, delete, formatShort, formatFull,
@@ -138,12 +157,17 @@ rather than retrofitted here.
 - `crudCommandUpdate(settings)` — generates a full slash command (`id`
   autocomplete supporting `all` and comma-separated bulk IDs, an optional
   `delete` flag, per-option retrieval/validation/update) from a CRUD object
-  plus a list of options. Not currently used by any live command, but
-  available for new features.
+  plus a list of options.
 - `crudCommandOption.*` — reusable option builders: `simpleString`,
-  `simpleBoolean`, `simpleChannel`, `simpleFk` (foreign key to another CRUD
-  table, with autocomplete), `simpleAttachment` (downloads a Discord
-  attachment to disk, tracked by the record's ID).
+  `simpleBoolean`, `simpleChannel`, `simpleChoice` (string with
+  `.addChoices`), `simpleNumber` (integer, min/max), `simpleFk` (foreign key
+  to another CRUD table, with autocomplete), `simpleAttachment` (downloads a
+  Discord attachment to disk, tracked by the record's ID). All support
+  `required`.
+- `crudAutocomplete(fkCrud, getNamespace)` — the "search another CRUD's
+  records by label" logic, factored out of `simpleFk` so hand-rolled
+  commands (the four list-mutation ones above) can reuse it instead of
+  duplicating it.
 
 ## Utilities (`util/`)
 
@@ -152,16 +176,14 @@ rather than retrofitted here.
   `batchLines`/`maxLength` (keep messages under Discord's 2000-char limit),
   `wrapInCode`, `channelInfoToString`, `booleanToString`, `msToString`,
   `stringList`, `ratioToString`.
+- `channel.ts` — `getChannelInfo`/`ChannelInfo` (`{id, name, parent?}`).
+  Now genuinely used: rule outcomes store their alert destination as a
+  `ChannelInfo` (via `crudCommandOption.simpleChannel`), not just a raw ID,
+  so `channelInfoToString` can render it nicely in `formatFull`.
 - `role.ts`, `guild.ts`, `user.ts` — small `{ id, name, ... }` normalizers
   (`getRoleInfo`, `getGuildInfo`, `getUserInfo`) for storing lightweight
   Discord object references. Currently unused by any command in this repo
   (likely shared conventions carried over from a sibling bot).
-- `channel.ts` — `getChannelInfo`, following the same pattern (`ChannelInfo`
-  with an optional `parent`, matching what `fmt.ts`'s `channelInfoToString`
-  expects). Added during the TypeScript migration: `crud.ts`'s
-  `simpleChannel` option builder referenced a `./channel` module that never
-  existed in the original JS codebase (dead code, since nothing used
-  `simpleChannel`); this fixes that gap instead of just typing around it.
 - `date.ts` — an ISO-8601 week-number calculator (`getWeek`); also currently
   unused here.
 
@@ -191,19 +213,42 @@ rather than retrofitted here.
   The entire persistence layer is hand-rolled JSON files, no database
   server.
 
+## Migrating existing data
+
+The old flat `RoleRemoverData` schema (single trigger role ID, inline
+`remove` map) is gone — replaced entirely by the pool-referencing
+`PrerequisiteRule`. There's no automatic migration: the one live
+production rule (guild `1220062574419116054`, Server Booster → 9 colour
+roles) needs to be manually recreated after deploying:
+
+1. `/role-pool name:Booster`, then `/role-pool-add-role` the booster role
+   into it (or just include it during creation once a multi-add flow
+   exists — for now it's create-then-add).
+2. `/role-pool name:Colors`, then `/role-pool-add-role` each of the 9
+   colour roles into it.
+3. `/role-prereq trigger:<Booster pool> remove:<Colors pool> outcome:fix
+   channel:<any channel, required but unused in fix mode>`.
+4. Delete the stale
+   `data/1220062574419116054/roles/812613272984748063.json` (or just leave
+   it — nothing reads the old `'roles'` table anymore, so it's inert, but
+   removing it avoids confusion).
+
 ## Known gaps / scaffolding not yet wired up
 
 - `interactions/buttons/` and `interactions/modals/` have no concrete
   handlers yet, only the auto-loading `index.ts`.
-- `crudCommandUpdate` and most of `crudCommandOption` (channel/FK/attachment
-  options) are unused by the current three commands — they're general
-  infrastructure shared with (or ported from) another bot in this project
-  family, available for future commands that need richer CRUD UX. Their
-  generic types lean on some intentionally loose `any`/cast escape hatches
-  (e.g. `retriever`'s return shape, and the `record[key] = value` dynamic
-  field assignment in each `crudCommandOption.simple*` builder) since fully
-  precise generics aren't worth the complexity for code no live command
-  exercises yet.
+- `crudCommandOption.simpleAttachment` is unused by any live command —
+  general infrastructure shared with (or ported from) another bot in this
+  project family. Its generic types (and `simpleFk`'s `retriever` shape)
+  lean on some intentionally loose `any`/cast escape hatches, same
+  rationale as `db.ts`'s custom-type registry.
 - `util/guild.ts`, `util/user.ts`, `util/date.ts` are unused in this repo.
 - `noUncheckedIndexedAccess` and other extra-strict `tsconfig` flags aren't
   enabled — `strict: true` is the current bar.
+- Editing an existing `crudCommandUpdate`-based record (e.g. `/role-prereq
+  id:<rule>`) currently re-requires *all* of that command's options, even
+  if you only want to change one field — every option here is marked
+  `required: true` since a rule can't function without them at creation
+  time, but `crudCommandUpdate` applies the same requiredness to edits.
+  Not fixed now; would need per-option "required only when creating" logic
+  in `crudCommandUpdate` if it becomes annoying in practice.

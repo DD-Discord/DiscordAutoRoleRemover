@@ -23,6 +23,9 @@ export async function deployCommands({ guildId }: DeployCommandsProps): Promise<
     console.log("Successfully reloaded commands in %s.", guildId);
   } catch (error) {
     console.error(error);
+    if (error && typeof error === 'object' && 'rawError' in error) {
+      console.error('Discord validation errors:', JSON.stringify((error as { rawError: unknown }).rawError, null, 2));
+    }
   }
 }
 
