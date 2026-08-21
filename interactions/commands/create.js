@@ -1,11 +1,10 @@
-const { CommandInteraction, SlashCommandBuilder, Role, PermissionFlagsBits } = require("discord.js");
 const discord = require("discord.js");
 const { dbGet, dbWrite } = require("../../db");
-const { roleRemoverData } = require("../../logic/update");
+const { roleRemoverData, createDefaultRoleRemoverData } = require("../../logic/update");
 
 module.exports.name = "role-remover-create";
 
-module.exports.data = new SlashCommandBuilder()
+module.exports.data = new discord.SlashCommandBuilder()
   .setName(module.exports.name)
   .setDescription("Adds a role to be auto removed.")
   .addRoleOption(option => {
@@ -20,7 +19,7 @@ module.exports.data = new SlashCommandBuilder()
     option.setRequired(true);
     return option;
   })
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles);
+  .setDefaultMemberPermissions(discord.PermissionFlagsBits.ManageRoles);
 
 /**
  * @param {discord.ChatInputCommandInteraction} interaction
@@ -33,11 +32,7 @@ module.exports.execute = async function(interaction) {
 
   let roles = roleRemoverData.get(interaction, optWhen.id)
   if (roles === null) {
-    roles = {}
-    roles.roleId = optWhen.id;
-    roles.roleName = optWhen.name;
-    roles.guildId = guildId;
-    roles.remove = {};
+    roles = createDefaultRoleRemoverData(interaction.guild, optWhen);
   }
 
   roles.remove[optRemove.id] = {

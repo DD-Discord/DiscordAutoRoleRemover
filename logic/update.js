@@ -1,4 +1,4 @@
-const { GuildMember } = require("discord.js");
+const discord = require("discord.js");
 const db = require("../db");
 const crud = require("../crud");
 const { maxLength } = require("../util/fmt");
@@ -28,9 +28,25 @@ const roleRemoverData = crud.crudDefine({
 module.exports.roleRemoverData = roleRemoverData;
 
 /**
+ * 
+ * @param {discord.Guild} guild
+ * @param {discord.Role} role
+ * @returns {RoleRemoverData}
+ */
+function createDefaultRoleRemoverData(guild, role) {
+  return {
+    guildId: guild.id,
+    roleId: role.id,
+    roleName: role.name,
+    remove: {},
+  };
+}
+module.exports.createDefaultRoleRemoverData = createDefaultRoleRemoverData;
+
+/**
  * Checks and removes roles.
- * @param {GuildMember} oldMember The old member.
- * @param {GuildMember?} newMember The new member.
+ * @param {discord.GuildMember} oldMember The old member.
+ * @param {discord.GuildMember?} newMember The new member.
  * @returns {Promise<void>} Once done
  */
 async function maybeUpdateRoles(oldMember, newMember) {
