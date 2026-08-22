@@ -3,28 +3,30 @@ import { dbId } from "../../db.js";
 import { crudCommandUpdateSubcommand, crudCommandOption, crudAutocomplete } from "../../crud.js";
 import { rolePoolData } from "../../logic/rolePool.js";
 import { conflictRuleData, ConflictRule } from "../../logic/conflict.js";
+import { getAlertSettings } from "../../logic/alertSettings.js";
 
 type Namespace = { guildId: string };
 
 // Pool membership (poolIds) is managed via the add-pool/remove-pool subcommands -
 // Discord has no multi-select option type, so "manage" only handles the flat
-// fields (name, alert channel).
+// `name` field. The alert channel is global now (see /role-alerts), not per-rule.
 const manage = crudCommandUpdateSubcommand<ConflictRule, Namespace>({
   name: 'manage',
-  description: 'Creates, edits, deletes, or lists conflict rules (name + alert channel).',
+  description: 'Creates, edits, deletes, or lists conflict rules (name only).',
   crud: conflictRuleData,
   options: [
     crudCommandOption.simpleString<ConflictRule>({ name: 'name', description: "The rule's display name.", required: true }),
-    crudCommandOption.simpleChannel<ConflictRule>({ name: 'channel', description: 'Channel to alert when a conflict is detected.', key: 'alertChannel', required: true }),
   ],
   getDefault: interaction => ({
     id: dbId(),
     guildId: interaction.guildId!,
     name: '',
     poolIds: [],
-    alertChannel: { id: '', name: '' },
   }),
   getNamespace: interaction => ({ guildId: interaction.guildId! }),
+  validate: record => getAlertSettings(record.guildId).alertChannel
+    ? []
+    : ["No global alert channel configured yet - run `/role-alerts set-channel` first."],
 });
 
 async function addPoolExecute(interaction: ChatInputCommandInteraction): Promise<unknown> {

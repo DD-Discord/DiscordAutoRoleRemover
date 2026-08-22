@@ -3,6 +3,7 @@ import { dbId } from "../../db.js";
 import { crudCommandUpdate, crudCommandOption } from "../../crud.js";
 import { rolePoolData, RolePool } from "../../logic/rolePool.js";
 import { prerequisiteRuleData, PrerequisiteRule } from "../../logic/prerequisite.js";
+import { getAlertSettings } from "../../logic/alertSettings.js";
 
 type Namespace = { guildId: string };
 
@@ -21,26 +22,20 @@ export const { name, data, execute, autocomplete } = crudCommandUpdate<Prerequis
     }),
     crudCommandOption.simpleFk<PrerequisiteRule, RolePool, Namespace>({
       name: 'dependent',
-      description: 'The pool of roles to strip.',
+      description: 'The pool of roles to act on.',
       key: 'dependentPoolId',
       fkCrud: rolePoolData,
       getFkNamespace: interaction => ({ guildId: interaction.guildId! }),
       required: true,
     }),
-    crudCommandOption.simpleChoice<PrerequisiteRule>({
-      name: 'outcome',
-      description: 'What to do when the rule triggers.',
-      key: 'action',
-      choices: [
-        { name: 'Auto-fix (remove the roles)', value: 'fix' },
-        { name: 'Alert a channel', value: 'alert' },
-      ],
+    crudCommandOption.simpleBoolean<PrerequisiteRule>({
+      name: 'fix',
+      description: 'Auto-remove the dependent roles when the rule triggers.',
       required: true,
     }),
-    crudCommandOption.simpleChannel<PrerequisiteRule>({
-      name: 'channel',
-      description: 'Channel to alert (also used as a fallback destination if auto-fixing turns out ambiguous).',
-      key: 'alertChannel',
+    crudCommandOption.simpleBoolean<PrerequisiteRule>({
+      name: 'alert',
+      description: 'Notify the global alert channel when the rule triggers. Independent of fix - both may be enabled.',
       required: true,
     }),
   ],
@@ -49,9 +44,19 @@ export const { name, data, execute, autocomplete } = crudCommandUpdate<Prerequis
     guildId: interaction.guildId!,
     requiredPoolId: '',
     dependentPoolId: '',
-    action: 'fix',
-    alertChannel: { id: '', name: '' },
+    fix: false,
+    alert: false,
   }),
   getNamespace: interaction => ({ guildId: interaction.guildId! }),
+  validate: record => {
+    const errors: string[] = [];
+    if (!record.fix && !record.alert) {
+      errors.push("At least one of `fix`/`alert` must be enabled - a rule that does neither has no effect.");
+    }
+    if (record.alert && !getAlertSettings(record.guildId).alertChannel) {
+      errors.push("No global alert channel configured yet - run `/role-alerts set-channel` first.");
+    }
+    return errors;
+  },
   defaultMemberPermissions: PermissionFlagsBits.ManageRoles,
 });

@@ -1,0 +1,47 @@
+import { DbRecord } from "../db.js";
+import { crudDefine, Crud } from "../crud.js";
+import { channelInfoToString, stringList } from "../util/fmt.js";
+import { ChannelInfo } from "../util/channel.js";
+
+/**
+ * A role or user to ping whenever an alert is posted.
+ */
+export interface PingTarget {
+  type: 'role' | 'user';
+  id: string;
+  name: string;
+}
+
+/**
+ * Per-guild alert configuration: one alert channel and one ping list, shared
+ * by every rule type. A singleton per guild - there is always exactly one
+ * record, keyed by the guild's own ID.
+ */
+export interface GuildAlertSettings extends DbRecord {
+  id: string;
+  guildId: string;
+  alertChannel: ChannelInfo | null;
+  pingTargets: PingTarget[];
+}
+
+function pingLabel(target: PingTarget): string {
+  return target.type === 'role' ? `<@&${target.id}>` : `<@${target.id}>`;
+}
+
+export const alertSettingsData: Crud<GuildAlertSettings, { guildId: string }> = crudDefine<GuildAlertSettings, { guildId: string }>({
+  name: 'alert settings',
+  getTable: ns => [ns.guildId, 'settings'],
+  formatShort: record => `Alert settings for this server`,
+  formatFull: (record, template) => template().addFields(
+    { name: 'Alert channel', value: record.alertChannel ? channelInfoToString(record.alertChannel) : 'Not configured' },
+    { name: 'Pings', value: stringList(record.pingTargets.map(pingLabel)) },
+  ),
+});
+
+/**
+ * Gets a guild's alert settings, or a safe empty default if nothing has been
+ * configured yet - callers never need a null check, just check `.alertChannel`.
+ */
+export function getAlertSettings(guildId: string): GuildAlertSettings {
+  return alertSettingsData.get({ guildId }, guildId) ?? { id: guildId, guildId, alertChannel: null, pingTargets: [] };
+}

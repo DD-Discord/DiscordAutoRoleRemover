@@ -6,6 +6,7 @@ import { rolePoolData } from "./logic/rolePool.js";
 import { prerequisiteRuleData } from "./logic/prerequisite.js";
 import { conflictRuleData } from "./logic/conflict.js";
 import { poolCapRuleData } from "./logic/poolCap.js";
+import { alertSettingsData } from "./logic/alertSettings.js";
 
 const client = new Client({
   intents: [
@@ -23,6 +24,7 @@ async function setupGuild(guild: Guild): Promise<void> {
   prerequisiteRuleData.register({ guildId: guild.id });
   conflictRuleData.register({ guildId: guild.id });
   poolCapRuleData.register({ guildId: guild.id });
+  alertSettingsData.register({ guildId: guild.id });
   await interactions.deploy({ guildId: guild.id });
 }
 

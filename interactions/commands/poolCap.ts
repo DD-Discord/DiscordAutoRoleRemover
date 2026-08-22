@@ -3,6 +3,7 @@ import { dbId } from "../../db.js";
 import { crudCommandUpdate, crudCommandOption } from "../../crud.js";
 import { rolePoolData, RolePool } from "../../logic/rolePool.js";
 import { poolCapRuleData, PoolCapRule } from "../../logic/poolCap.js";
+import { getAlertSettings } from "../../logic/alertSettings.js";
 
 type Namespace = { guildId: string };
 
@@ -26,20 +27,14 @@ export const { name, data, execute, autocomplete } = crudCommandUpdate<PoolCapRu
       min: 0,
       required: true,
     }),
-    crudCommandOption.simpleChoice<PoolCapRule>({
-      name: 'outcome',
-      description: 'What to do when the rule triggers. Only unambiguous when max is 0 - otherwise always alerts.',
-      key: 'action',
-      choices: [
-        { name: 'Auto-fix (remove the roles)', value: 'fix' },
-        { name: 'Alert a channel', value: 'alert' },
-      ],
+    crudCommandOption.simpleBoolean<PoolCapRule>({
+      name: 'fix',
+      description: 'Auto-remove overflow roles. Only unambiguous when max is 0 - otherwise never fixes.',
       required: true,
     }),
-    crudCommandOption.simpleChannel<PoolCapRule>({
-      name: 'channel',
-      description: 'Channel to alert (also used as a fallback destination if auto-fixing turns out ambiguous).',
-      key: 'alertChannel',
+    crudCommandOption.simpleBoolean<PoolCapRule>({
+      name: 'alert',
+      description: 'Notify the global alert channel on overflow. Independent of fix - both may be enabled.',
       required: true,
     }),
   ],
@@ -48,9 +43,19 @@ export const { name, data, execute, autocomplete } = crudCommandUpdate<PoolCapRu
     guildId: interaction.guildId!,
     poolId: '',
     maxAllowed: 0,
-    action: 'fix',
-    alertChannel: { id: '', name: '' },
+    fix: false,
+    alert: false,
   }),
   getNamespace: interaction => ({ guildId: interaction.guildId! }),
+  validate: record => {
+    const errors: string[] = [];
+    if (!record.fix && !record.alert) {
+      errors.push("At least one of `fix`/`alert` must be enabled - a rule that does neither has no effect.");
+    }
+    if (record.alert && !getAlertSettings(record.guildId).alertChannel) {
+      errors.push("No global alert channel configured yet - run `/role-alerts set-channel` first.");
+    }
+    return errors;
+  },
   defaultMemberPermissions: PermissionFlagsBits.ManageRoles,
 });

@@ -18,25 +18,33 @@ simple case: even a single-role condition (like "is boosting") is just a
 pool with one role in it. Three rule types reference pools:
 
 1. **Prerequisite rules** (`logic/prerequisite.ts`) — if a member loses
-   their last role from a *required pool*, strip whatever roles they hold
+   their last role from a *required pool*, act on whatever roles they hold
    from a *dependent pool*. This is the original Booster→colours behavior,
    generalized.
 2. **Conflict rules** (`logic/conflict.ts`) — 2+ pools that are mutually
    exclusive; if a member ends up with roles from 2+ of them at once,
-   that's a conflict. **Alert-only** — there's no tie-break rule for which
-   pool should "win," so this rule type doesn't offer auto-fix at all.
+   that's a conflict. **Always alerts** — there's no tie-break rule for
+   which pool should "win," so this rule type has no `fix` option and no
+   `RuleOutcome` fields at all (nothing left to toggle).
 3. **Pool cap rules** (`logic/poolCap.ts`) — a single pool with a
    max-allowed count; if a member holds more than that, that's an
-   overflow. Auto-fix is only unambiguous when the cap is `0` (remove
-   everything — no subset choice to make); any overflow above a cap of `0`
-   always alerts instead, regardless of the rule's configured action,
-   since there's no rule for which extra role(s) to drop.
+   overflow. Auto-fix is only ever attempted when the cap is `0` (remove
+   everything — no subset choice to make); above that, `fix` never fires
+   (there's no rule for which extra role(s) to drop) — only `alert` can
+   react to it, and only if enabled.
 
 Prerequisite and pool-cap rules share a `RuleOutcome` (`logic/outcome.ts`):
-`action: 'fix' | 'alert'` plus an `alertChannel`, which is **always
-required** even in `fix` mode — an ambiguous pool-cap overflow falls back
-to alerting no matter how the rule is configured, so there must always be
-somewhere to send that fallback alert.
+`{ fix: boolean; alert: boolean }`, **independent** toggles — a rule can
+auto-fix *and* still notify, do just one, or (rejected at the command
+level via `validate`, see below) neither. There is deliberately no
+forced-alert fallback: if a rule has `alert: false` and hits a situation
+it can't auto-fix (e.g. a pool-cap overflow above `max: 0`), it now does
+nothing at all and stays silent — a conscious trade-off over the earlier
+always-alert-on-ambiguity behavior.
+
+The alert **channel** and **ping list** are no longer per-rule — they're
+one global per-guild configuration (`logic/alertSettings.ts`,
+`/role-alerts`) shared by every rule type. See below.
 
 All three checks run on every `GuildMemberUpdate`, dispatched from
 `logic/update.ts` (now a thin orchestrator — see below) and only act on
@@ -44,14 +52,32 @@ transitions (a role just lost, a count that just increased), never on
 every subsequent unrelated role change while a violation persists — this
 avoids re-alerting or re-processing on every unrelated role edit.
 
+### Global alert settings (`logic/alertSettings.ts`)
+
+A per-guild **singleton** (not a list — always exactly one record, keyed
+by the guild's own ID): `GuildAlertSettings { alertChannel: ChannelInfo |
+null; pingTargets: PingTarget[] }`, where a `PingTarget` is `{ type: 'role'
+| 'user'; id; name }`. `getAlertSettings(guildId)` returns a safe empty
+default (`alertChannel: null, pingTargets: []`) when nothing's configured
+yet, so every evaluator can call it unconditionally and just check
+`.alertChannel` before sending — no null-checking `alertSettingsData.get`
+directly. `logic/outcome.ts`'s `sendAlert(guild, settings, message)`
+prefixes the message with a mention for every ping target before sending.
+
+Configured via `/role-alerts` (hand-rolled, not `crudCommandUpdate` — a
+singleton has no create/edit/delete/list-all shape to reuse):
+`set-channel`, `add-ping`/`remove-ping` (Discord's Mentionable option type,
+resolving to a `Role`/`GuildMember`/`User` — disambiguated via
+`instanceof`), and `check`.
+
 ## Entry point & runtime wiring (`index.ts`)
 
 - Creates a `discord.js` `Client` with `Guilds` and `GuildMembers` intents
   (the latter is required to receive `GuildMemberUpdate`).
 - On `GuildAvailable` (guilds the bot is already in) and `GuildCreate`
-  (newly joined guilds), registers all four DB tables (pools,
-  prerequisites, conflicts, caps) for that guild and re-deploys slash
-  commands to it.
+  (newly joined guilds), registers all five DB tables (pools,
+  prerequisites, conflicts, caps, settings) for that guild and re-deploys
+  slash commands to it.
 - On `GuildMemberUpdate`, delegates to `maybeUpdateRoles`.
 - On `InteractionCreate`, delegates to the generic interaction router.
 
@@ -89,21 +115,28 @@ avoids re-alerting or re-processing on every unrelated role edit.
 
 ### Commands (`interactions/commands/`)
 
-4 top-level commands, `ManageRoles`-gated. `role-prereq` and `role-cap`
+5 top-level commands, `ManageRoles`-gated. `role-prereq` and `role-cap`
 each have exactly one action (create/edit/delete/list-in-one, via
 `crud.ts`'s `crudCommandUpdate`), so they stay flat. `role-pool` and
 `role-conflict` each need that same consolidated action *plus* one or two
 list-mutation actions (Discord has no multi-select option type, so
 growing a pool's/conflict-rule's list field needs one-role/one-pool-at-a-
 time actions) — those are grouped as subcommands under one top-level
-command via `crud.ts`'s `crudCommandUpdateSubcommand`.
+command via `crud.ts`'s `crudCommandUpdateSubcommand`. `role-alerts` is
+hand-rolled (a config singleton, not a CRUD list).
 
 | Command | Subcommands | Purpose |
 |---|---|---|
 | `role-pool` | `manage`, `add-role`, `remove-role` | `manage` creates/edits/deletes/lists pools (`name` only); `add-role`/`remove-role` grow membership. |
-| `role-conflict` | `manage`, `add-pool`, `remove-pool` | `manage` creates/edits/deletes/lists rules (name, alert channel); `add-pool`/`remove-pool` grow the pool list. |
-| `role-prereq` | *(none — flat)* | Create/edit/delete/list prerequisite rules (required pool, dependent pool, outcome, channel). |
-| `role-cap` | *(none — flat)* | Create/edit/delete/list pool cap rules (pool, max allowed, outcome, channel). |
+| `role-conflict` | `manage`, `add-pool`, `remove-pool` | `manage` creates/edits/deletes/lists rules (`name` only); `add-pool`/`remove-pool` grow the pool list. |
+| `role-prereq` | *(none — flat)* | Create/edit/delete/list prerequisite rules (required pool, dependent pool, `fix`, `alert`). |
+| `role-cap` | *(none — flat)* | Create/edit/delete/list pool cap rules (pool, max allowed, `fix`, `alert`). |
+| `role-alerts` | `set-channel`, `add-ping`, `remove-ping`, `check` | Configures the one global alert channel + ping list shared by every rule type. |
+
+`role-prereq`/`role-cap`/`role-conflict`'s `manage` each carry a `validate`
+hook (see the `crud.ts` section) that rejects creating/editing a rule with
+`fix`/`alert` both `false`, and rejects enabling `alert` before
+`/role-alerts set-channel` has ever been run in that guild.
 
 `manage` subcommands use `crudCommandUpdate`'s usual `id` (autocompleted,
 selects an existing record to edit/view; omit to create new, `id:all`
@@ -136,7 +169,7 @@ A minimal file-based database with no external dependencies:
   lazily from disk, `dbWrite`/`dbDelete` keep it in sync.
 - A table must be `dbRegister`'d (which also `mkdir`s its directory) before
   it can be read or written — done once per guild in `index.ts`, for all
-  four tables.
+  five tables.
 - Always query through a CRUD's own `getAll`/`get` (namespaced,
   e.g. `prerequisiteRuleData.getAll({ guildId })`), never a raw
   `dbGetAll("tablename")` with a flat string — the original JS had exactly
@@ -169,7 +202,12 @@ Fixed by adding the caller's `options` first.
 - `crudCommandUpdate(settings)` — generates a full slash command (`id`
   autocomplete supporting `all` and comma-separated bulk IDs, an optional
   `delete` flag, per-option retrieval/validation/update) from a CRUD object
-  plus a list of options.
+  plus a list of options. An optional `validate: (record) => string[]`
+  hook runs cross-field checks a single option's own retriever can't
+  express (e.g. "at least one of `fix`/`alert` must be true") — applied to
+  every record in memory after its options are updated but before any
+  record is written, so a validation failure aborts the whole operation
+  without writing anything.
 - `crudCommandUpdateSubcommand(subcommandName, settings)` — the same
   create/edit/delete/list logic, nested as one `SlashCommandSubcommandBuilder`
   instead of owning a full top-level command, so it can sit alongside
@@ -198,9 +236,9 @@ Fixed by adding the caller's `options` first.
   `wrapInCode`, `channelInfoToString`, `booleanToString`, `msToString`,
   `stringList`, `ratioToString`.
 - `channel.ts` — `getChannelInfo`/`ChannelInfo` (`{id, name, parent?}`).
-  Now genuinely used: rule outcomes store their alert destination as a
-  `ChannelInfo` (via `crudCommandOption.simpleChannel`), not just a raw ID,
-  so `channelInfoToString` can render it nicely in `formatFull`.
+  Now genuinely used: `GuildAlertSettings.alertChannel` (the one global
+  alert destination) is a `ChannelInfo`, not just a raw ID, so
+  `channelInfoToString` can render it nicely wherever it's displayed.
 - `role.ts`, `guild.ts`, `user.ts` — small `{ id, name, ... }` normalizers
   (`getRoleInfo`, `getGuildInfo`, `getUserInfo`) for storing lightweight
   Discord object references. Currently unused by any command in this repo
@@ -236,23 +274,31 @@ Fixed by adding the caller's `options` first.
 
 ## Migrating existing data
 
-The old flat `RoleRemoverData` schema (single trigger role ID, inline
-`remove` map) is gone — replaced entirely by the pool-referencing
-`PrerequisiteRule`. There's no automatic migration: the one live
-production rule (guild `1220062574419116054`, Server Booster → 9 colour
-roles) needs to be manually recreated after deploying:
+Two different approaches were used for the two schema changes this
+project has been through so far, worth knowing about before making a
+third:
 
-1. `/role-pool name:Booster`, then `/role-pool-add-role` the booster role
-   into it (or just include it during creation once a multi-add flow
-   exists — for now it's create-then-add).
-2. `/role-pool name:Colors`, then `/role-pool-add-role` each of the 9
-   colour roles into it.
-3. `/role-prereq required:<Booster pool> dependent:<Colors pool> outcome:fix
-   channel:<any channel, required but unused in fix mode>`.
-4. Delete the stale
-   `data/1220062574419116054/roles/812613272984748063.json` (or just leave
-   it — nothing reads the old `'roles'` table anymore, so it's inert, but
-   removing it avoids confusion).
+- **Pool-referencing rewrite** (raw role IDs → pool references): no
+  automatic migration — the shapes were different enough (single IDs →
+  pool references, requiring new pool records to exist first) that the
+  live rule was just manually recreated via the new commands after
+  deploying.
+- **Alert-system rework** (`action: 'fix'|'alert'` + per-rule
+  `alertChannel` → independent `fix`/`alert` + global settings): uses
+  `crudDefine`'s `migrate?: (record: T | null) => T | null` hook instead
+  (see `prerequisiteRuleData`/`poolCapRuleData`/`conflictRuleData` in
+  `logic/`) — it runs transparently on every `get`/`getAll`, and its
+  output is what gets persisted next time that record is `write()`-d, so
+  old on-disk records upgrade themselves the moment they're read, no
+  manual JSON editing needed. **Prefer this approach whenever the old and
+  new shapes are close enough to transform in place** (a field rename, a
+  choice-to-booleans split) — reach for manual recreation only when the
+  new shape depends on data that doesn't exist yet (like brand-new pool
+  records). A `migrate` hook can only transform its own record, though —
+  it can't populate a *different* CRUD's storage, so the brand-new
+  `alertSettingsData` table still needs a one-time `/role-alerts
+  set-channel` after deploying (not a migration, since there's no prior
+  data for that table to migrate from).
 
 ## Known gaps / scaffolding not yet wired up
 

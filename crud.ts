@@ -177,6 +177,13 @@ export interface CrudCommandUpdateSettings<T extends DbRecord, N> {
   getDefault: (interaction: ChatInputCommandInteraction) => T;
   /** Gets the namespace. */
   getNamespace: (interaction: ChatInputCommandInteraction) => N;
+  /**
+   * Cross-field validation that a single option's own retriever can't express
+   * (e.g. "at least one of these two options must be true"). Runs on every
+   * record after options are applied but before anything is written; any
+   * errors abort the whole operation without writing any record.
+   */
+  validate?: (record: T) => string[];
   /** No deleting. */
   disableDelete?: boolean;
   /** No updating. */
@@ -329,18 +336,39 @@ function buildCrudHandlers<T extends DbRecord, N>(
         ephemeral: true,
       });
     }
-    // Perform patches.
+    // Apply patches to clones, not the live records. `crud.get`/`getAll` hand
+    // back the DB's own cached object references (not copies), so mutating
+    // `recordsToUpdate` directly would corrupt the in-memory cache with a
+    // rejected edit the moment `validate` fails below - even though nothing
+    // was ever written to disk. Cloning means a validation failure leaves
+    // every original record (cache included) completely untouched.
+    const updatedRecords: T[] = [];
     for (const record of recordsToUpdate) {
+      const updated = structuredClone(record);
       for (let i = 0; i < crudSettings.options.length; i++) {
         const option = crudSettings.options[i]!;
         const value = optionsValueArray[i];
         if (value !== null || option.allowNullValues) {
-          await option.updater(value, record);
+          await option.updater(value, updated);
           if (!operationName) {
             operationName = 'updated';
           }
         }
       }
+      if (crudSettings.validate) {
+        errors.push(...crudSettings.validate(updated));
+      }
+      updatedRecords.push(updated);
+    }
+    // Cannot continue with errors.
+    if (errors.length > 0) {
+      return interaction.reply({
+        content: `# Errors are present\n${errors.map(str => `- ${str}`).join('\n')}`,
+        ephemeral: true,
+      });
+    }
+    // Perform writes.
+    for (const record of updatedRecords) {
       crudSettings.crud.write(namespace, record);
     }
 
@@ -348,9 +376,9 @@ function buildCrudHandlers<T extends DbRecord, N>(
       operationName = 'displayed';
     }
     return interaction.reply({
-      content: `# ${crudSettings.crud.displayName(recordsToUpdate.length)} ${operationName}`,
-      embeds: recordsToUpdate.map(record => crudSettings.crud.formatFull(record)),
-      files: recordsToUpdate.flatMap(record => crudSettings.crud.getAttachments(record)),
+      content: `# ${crudSettings.crud.displayName(updatedRecords.length)} ${operationName}`,
+      embeds: updatedRecords.map(record => crudSettings.crud.formatFull(record)),
+      files: updatedRecords.flatMap(record => crudSettings.crud.getAttachments(record)),
     });
   }
 

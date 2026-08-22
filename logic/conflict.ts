@@ -1,23 +1,23 @@
 import { GuildMember, PartialGuildMember } from "discord.js";
 import { DbRecord } from "../db.js";
 import { crudDefine, Crud } from "../crud.js";
-import { maxLength, channelInfoToString } from "../util/fmt.js";
-import { ChannelInfo } from "../util/channel.js";
+import { maxLength } from "../util/fmt.js";
 import { sendAlert } from "./outcome.js";
 import { rolePoolData, RolePool } from "./rolePool.js";
+import { getAlertSettings } from "./alertSettings.js";
 
 /**
  * 2+ mutually exclusive pools: if a member ends up with roles from 2+ of
- * them at once, that's a conflict. Alert-only — see logic/outcome.ts and the
- * project plan for why "fix" isn't offered here (no tie-break rule exists
- * for which pool should win).
+ * them at once, that's a conflict. Always alerts (via the guild's global
+ * alert settings) — see logic/outcome.ts and the project plan for why
+ * "fix" isn't offered here (no tie-break rule exists for which pool should
+ * win), which also means there's nothing left to toggle on this rule type.
  */
 export interface ConflictRule extends DbRecord {
   id: string;
   guildId: string;
   name: string;
   poolIds: string[];
-  alertChannel: ChannelInfo;
 }
 
 function poolLabel(guildId: string, poolId: string): string {
@@ -28,10 +28,21 @@ function poolLabel(guildId: string, poolId: string): string {
 export const conflictRuleData: Crud<ConflictRule, { guildId: string }> = crudDefine<ConflictRule, { guildId: string }>({
   name: 'conflict rule',
   getTable: ns => [ns.guildId, 'conflicts'],
+  // Drops the old per-rule `alertChannel` field (now global) from any
+  // record still carrying it - see prerequisite.ts's migrate hook for the
+  // full rationale.
+  migrate: record => {
+    if (!record) return record;
+    const legacy = record as unknown as Record<string, unknown>;
+    if ('alertChannel' in legacy) {
+      const { alertChannel, ...rest } = legacy;
+      return rest as unknown as ConflictRule;
+    }
+    return record;
+  },
   formatShort: record => `\`${record.id}\`: ${record.name} (${record.poolIds.length} pools)`,
   formatFull: (record, template) => template().addFields(
     { name: 'Pools', value: maxLength(record.poolIds.map(id => poolLabel(record.guildId, id)).join('\n') || 'None', 1000) },
-    { name: 'Alert channel', value: channelInfoToString(record.alertChannel) },
   ),
 });
 
@@ -62,7 +73,7 @@ export async function checkConflictRules(oldMember: GuildMember | PartialGuildMe
 
     await sendAlert(
       newMember.guild,
-      rule.alertChannel,
+      getAlertSettings(rule.guildId),
       `__⚠️ Conflict **${rule.name}**__\n${newMember} now holds roles from ${newRepresented.length} mutually exclusive pools:\n${clashLines.join('\n')}`,
     );
   }

@@ -1,13 +1,15 @@
 import { GuildMember, PartialGuildMember } from "discord.js";
 import { DbRecord } from "../db.js";
 import { crudDefine, Crud } from "../crud.js";
-import { channelInfoToString } from "../util/fmt.js";
 import { RuleOutcome, sendAlert } from "./outcome.js";
 import { rolePoolData } from "./rolePool.js";
+import { getAlertSettings } from "./alertSettings.js";
 
 /**
  * A single pool with a max-allowed count: if a member holds more than that
- * from the pool, that's an overflow.
+ * from the pool, that's an overflow. `fix` and `alert` are independent -
+ * see checkPoolCapRules for why `fix` is only ever attempted at `maxAllowed
+ * === 0`.
  */
 export interface PoolCapRule extends DbRecord, RuleOutcome {
   id: string;
@@ -24,11 +26,24 @@ function poolLabel(guildId: string, poolId: string): string {
 export const poolCapRuleData: Crud<PoolCapRule, { guildId: string }> = crudDefine<PoolCapRule, { guildId: string }>({
   name: 'pool cap rule',
   getTable: ns => [ns.guildId, 'caps'],
-  formatShort: record => `\`${record.id}\`: ${poolLabel(record.guildId, record.poolId)} (max ${record.maxAllowed}, ${record.action})`,
+  // Upgrades records still in the old `action: 'fix'|'alert'` + per-rule
+  // `alertChannel` shape - see prerequisite.ts's migrate for the full
+  // rationale (same reasoning applies here).
+  migrate: record => {
+    if (!record) return record;
+    const legacy = record as unknown as Record<string, unknown>;
+    if (typeof legacy.action === 'string') {
+      const { action, alertChannel, ...rest } = legacy;
+      return { ...rest, fix: action === 'fix', alert: action === 'alert' } as PoolCapRule;
+    }
+    return record;
+  },
+  formatShort: record => `\`${record.id}\`: ${poolLabel(record.guildId, record.poolId)} (max ${record.maxAllowed}, ${[record.fix && 'fix', record.alert && 'alert'].filter(Boolean).join('+')})`,
   formatFull: (record, template) => template().addFields(
     { name: 'Pool', value: poolLabel(record.guildId, record.poolId) },
     { name: 'Max allowed', value: String(record.maxAllowed) },
-    { name: 'Outcome', value: record.action === 'fix' ? 'Auto-fix' : `Alert ${channelInfoToString(record.alertChannel)}` },
+    { name: 'Auto-fix', value: record.fix ? 'Yes (only unambiguous at max: 0)' : 'No' },
+    { name: 'Alert', value: record.alert ? 'Yes' : 'No' },
   ),
 });
 
@@ -38,9 +53,11 @@ export const poolCapRuleData: Crud<PoolCapRule, { guildId: string }> = crudDefin
  * on every subsequent unrelated role change while an overflow persists).
  *
  * "Fix" is only unambiguous when `maxAllowed === 0` (remove everything from
- * the pool - no subset choice to make). Any overflow above that always
- * alerts regardless of the configured action, since there's no tie-break
- * rule for which extra role(s) to drop.
+ * the pool - no subset choice to make). Any overflow above that never gets
+ * auto-fixed - `alert` fires if enabled, otherwise the overflow is silently
+ * left alone (there's no tie-break rule for which extra role(s) to drop, and
+ * per the rework, `alert: false` is respected strictly rather than forcing a
+ * fallback alert).
  */
 export async function checkPoolCapRules(oldMember: GuildMember | PartialGuildMember, newMember: GuildMember): Promise<void> {
   const rules = poolCapRuleData.getAll({ guildId: newMember.guild.id });
@@ -57,7 +74,9 @@ export async function checkPoolCapRules(oldMember: GuildMember | PartialGuildMem
       continue;
     }
 
-    if (rule.maxAllowed === 0 && rule.action === 'fix') {
+    const unambiguous = rule.maxAllowed === 0;
+    let fixed = false;
+    if (unambiguous && rule.fix) {
       for (const roleId of newHeld) {
         console.log(`Will remove ${roleId} from ${newMember.id} (${newMember.displayName}) - pool cap`);
         try {
@@ -66,15 +85,17 @@ export async function checkPoolCapRules(oldMember: GuildMember | PartialGuildMem
           console.log(`Failed to remove ${roleId} from ${newMember}`, error);
         }
       }
-      continue;
+      fixed = true;
     }
 
-    // Either action === 'alert', or an ambiguous (maxAllowed >= 1) overflow
-    // that can't be auto-fixed without a tie-break rule.
-    await sendAlert(
-      newMember.guild,
-      rule.alertChannel,
-      `__⚠️ Pool cap **${pool.name}**__\n${newMember} holds ${newHeld.length} roles (max ${rule.maxAllowed}): ${newHeld.map(id => `<@&${id}>`).join(', ')}.`,
-    );
+    if (rule.alert) {
+      const heading = fixed
+        ? `__✅ Pool cap **${pool.name}**__`
+        : `__⚠️ Pool cap **${pool.name}**__`;
+      const body = fixed
+        ? `${newMember} exceeded max ${rule.maxAllowed} for this pool - auto-removed ${newHeld.map(id => `<@&${id}>`).join(', ')}.`
+        : `${newMember} holds ${newHeld.length} roles (max ${rule.maxAllowed}): ${newHeld.map(id => `<@&${id}>`).join(', ')}.`;
+      await sendAlert(newMember.guild, getAlertSettings(rule.guildId), `${heading}\n${body}`);
+    }
   }
 }
