@@ -3,6 +3,8 @@ import { DbRecord } from "../db.js";
 import { crudDefine, Crud } from "../crud.js";
 import { channelInfoToString, stringList } from "../util/fmt.js";
 import { ChannelInfo } from "../util/channel.js";
+import { getGuildInfo } from "../util/guild.js";
+import { WebhookChannelInfo } from "../util/webhook.js";
 
 /**
  * A role or user to ping whenever an alert is posted.
@@ -19,9 +21,9 @@ export interface PingTarget {
  * record, keyed by the guild's own ID.
  *
  * `webhookId`/`webhookToken` back the bot-managed webhook alerts are sent
- * through (see logic/outcome.ts's sendAlert), so each alert can impersonate
- * the reported member's name/avatar. Both are `null` until the first alert
- * (or `/role-alerts set-channel`) creates one - see `createWebhookForChannel`.
+ * through (see logic/outcome.ts's sendAlert and util/webhook.ts), so each
+ * alert can impersonate the reported member's name/avatar. Both are `null`
+ * until the first alert (or `/role-alerts set-channel`) creates one.
  */
 export interface GuildAlertSettings extends DbRecord {
   id: string;
@@ -55,24 +57,20 @@ export function getAlertSettings(guildId: string): GuildAlertSettings {
 }
 
 /**
- * Creates a fresh webhook in the given channel for posting alerts through.
- * Requires the bot to have Manage Webhooks in that channel. Returns `null`
- * (rather than throwing) on any failure - callers surface that as "couldn't
- * set up alerts here" rather than a crash.
+ * Builds the `WebhookChannelInfo` needed by `util/webhook.ts`'s
+ * `webhookSend`/`webhookDelete` from stored settings plus the live `Guild`
+ * object (not persisted - guild/channel names would go stale on disk, and
+ * the live object is always available at every call site anyway). `null` if
+ * no webhook has been created yet.
  */
-export async function createWebhookForChannel(channelId: string, guild: Guild): Promise<{ id: string, token: string } | null> {
-  try {
-    const channel = await guild.channels.fetch(channelId);
-    if (!channel || !('createWebhook' in channel)) {
-      return null;
-    }
-    const webhook = await channel.createWebhook({
-      name: 'Role Alerts',
-      reason: 'Alert channel for the role rule engine',
-    });
-    return webhook.token ? { id: webhook.id, token: webhook.token } : null;
-  } catch (error) {
-    console.warn(`Failed to create alert webhook in channel ${channelId}`, error);
+export function toWebhookChannelInfo(guild: Guild, settings: GuildAlertSettings): WebhookChannelInfo | null {
+  if (!settings.alertChannel || !settings.webhookId || !settings.webhookToken) {
     return null;
   }
+  return {
+    id: settings.webhookId,
+    token: settings.webhookToken,
+    guild: getGuildInfo(guild),
+    channel: settings.alertChannel,
+  };
 }

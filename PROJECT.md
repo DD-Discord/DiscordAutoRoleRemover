@@ -67,15 +67,38 @@ and just check `.alertChannel` before sending — no null-checking
 webhook's per-message `username`/`avatarURL` are overridden to the
 *reported member's* display name and avatar (`logic/outcome.ts`'s
 `sendAlert(guild, settings, message, member)`), so an alert visually reads
-as coming from the member in question. `createWebhookForChannel` (also in
-`alertSettings.ts`) creates it; requires the bot to have **Manage
-Webhooks** in the alert channel, in addition to the `ManageRoles`
-permission gating who can run the commands. If the stored webhook goes
-missing (e.g. a human deletes it via Discord's Integrations UI),
-`sendAlert` recreates one and retries automatically — no admin action
-needed. If a webhook genuinely can't be created/used at all, `sendAlert`
-falls back to a plain message from the bot itself rather than dropping
-the alert (no impersonation in that case, but it still arrives).
+as coming from the member in question. The webhook mechanics live in
+`util/webhook.ts` (not this repo's own code originally — carried over from
+elsewhere in the project family, matching how `crud.ts`'s generic
+infrastructure was sat unused until it had a real caller):
+
+- `createWebhookForChannel(guild, channelInfo, options)` — creates the
+  webhook. Thread-aware: if `channelInfo` is a thread, it resolves to the
+  thread's *parent* first (webhooks can only live on non-thread channels),
+  but the returned `WebhookChannelInfo.channel` keeps the original
+  (possibly-thread) `channelInfo`.
+- `webhookSend(info, message)` / `webhookDelete(info, messageId)` — send
+  or delete via a cached `WebhookClient` (keyed by webhook ID, so repeated
+  alerts reuse one client rather than constructing a fresh one per send).
+  Both derive `threadId` automatically from `info.channel.parent` being
+  set, so posting into a thread "just works" without the caller tracking
+  thread-ness itself.
+- `logic/alertSettings.ts`'s `toWebhookChannelInfo(guild, settings)` adapts
+  stored settings into the `WebhookChannelInfo` shape these expect
+  (`guild`/`channel` are built fresh from the live `Guild` object each
+  call, not persisted — avoids the stored guild/channel *name* going stale
+  if either is ever renamed).
+
+Because of this, `/role-alerts set-channel`'s channel option accepts
+threads as well as regular text/announcement channels. Using a webhook
+requires the bot to have **Manage Webhooks** in the target channel (the
+thread's parent, if a thread), in addition to the `ManageRoles` permission
+gating who can run the commands. If the stored webhook goes missing (e.g.
+a human deletes it via Discord's Integrations UI), `sendAlert` recreates
+one and retries automatically — no admin action needed. If a webhook
+genuinely can't be created/used at all, `sendAlert` falls back to a plain
+message from the bot itself rather than dropping the alert (no
+impersonation in that case, but it still arrives).
 
 Security note: `webhookToken` is stored in plain JSON on disk — anyone
 holding it can post as that webhook (any name/avatar they choose) to that
@@ -265,8 +288,13 @@ Fixed by adding the caller's `options` first.
   `channelInfoToString` can render it nicely wherever it's displayed.
 - `role.ts`, `guild.ts`, `user.ts` — small `{ id, name, ... }` normalizers
   (`getRoleInfo`, `getGuildInfo`, `getUserInfo`) for storing lightweight
-  Discord object references. Currently unused by any command in this repo
-  (likely shared conventions carried over from a sibling bot).
+  Discord object references (likely shared conventions carried over from a
+  sibling bot). `guild.ts`'s `getGuildInfo` is now genuinely used, by
+  `webhook.ts` below; `role.ts`/`user.ts` are still unused by any command
+  in this repo.
+- `webhook.ts` — thread-aware webhook helpers backing the alert system's
+  impersonation feature; see [Global alert settings](#global-alert-settings-logicalertsettingsts)
+  above for the full breakdown.
 - `date.ts` — an ISO-8601 week-number calculator (`getWeek`); also currently
   unused here.
 
@@ -341,7 +369,7 @@ third:
   project family. Its generic types (and `simpleFk`'s `retriever` shape)
   lean on some intentionally loose `any`/cast escape hatches, same
   rationale as `db.ts`'s custom-type registry.
-- `util/guild.ts`, `util/user.ts`, `util/date.ts` are unused in this repo.
+- `util/user.ts`, `util/date.ts` are unused in this repo.
 - `noUncheckedIndexedAccess` and other extra-strict `tsconfig` flags aren't
   enabled — `strict: true` is the current bar.
 - Editing an existing `crudCommandUpdate`-based record (e.g. `/role-prereq

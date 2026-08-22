@@ -6,7 +6,9 @@ or both at once.
 
 All commands below require **Manage Roles** permission to use. The bot's
 own role also needs **Manage Webhooks** permission in whichever channel
-you use for alerts (see below).
+you use for alerts (see below) — if you pick a thread, that permission is
+needed in the thread's parent channel, since Discord webhooks live on the
+parent, not the thread itself.
 
 ## Alert settings: one shared channel + ping list
 
@@ -16,7 +18,7 @@ per-rule).
 
 | Command | What it does |
 |---|---|
-| `/role-alerts set-channel channel:<#channel>` | Sets the channel alerts are posted to (text/announcement channels only). |
+| `/role-alerts set-channel channel:<#channel>` | Sets the channel alerts are posted to (a text/announcement channel, or a thread inside one). |
 | `/role-alerts add-ping target:<@role-or-user>` | Adds a role or user to ping on every alert. |
 | `/role-alerts remove-ping target:<@role-or-user>` | Removes one. |
 | `/role-alerts check` | Shows the current channel and ping list. |
