@@ -4,6 +4,8 @@ import {
   EmbedBuilder,
   AttachmentBuilder,
   SlashCommandBuilder,
+  SlashCommandSubcommandBuilder,
+  SharedSlashCommandOptions,
   ChatInputCommandInteraction,
   AutocompleteInteraction,
   Attachment,
@@ -170,7 +172,7 @@ export interface CrudCommandUpdateSettings<T extends DbRecord, N> {
   /** The options. */
   options: CrudCommandUpdateSettingsOption<T>[];
   /** An additional factory to further configure the command. */
-  factory?: (builder: SlashCommandBuilder, settings: CrudCommandUpdateSettings<T, N>) => void;
+  factory?: (builder: SharedSlashCommandOptions<any>, settings: CrudCommandUpdateSettings<T, N>) => void;
   /** Gets a default record. */
   getDefault: (interaction: ChatInputCommandInteraction) => T;
   /** Gets the namespace. */
@@ -183,7 +185,7 @@ export interface CrudCommandUpdateSettings<T extends DbRecord, N> {
 }
 
 export interface CrudCommandUpdateSettingsOption<T> {
-  factory: (builder: SlashCommandBuilder, option: CrudCommandUpdateSettingsOption<T>) => void;
+  factory: (builder: SharedSlashCommandOptions<any>, option: CrudCommandUpdateSettingsOption<T>) => void;
   /** The option's name, used to route autocomplete requests. */
   name: string;
   // The result is inherently either a raw value or `{ value?, errors? }` depending on
@@ -198,18 +200,20 @@ export interface CrudCommandUpdateSettingsOption<T> {
 }
 
 /**
- * Defines a CRUD update command.
+ * Populates any option-capable builder (a top-level `SlashCommandBuilder` or a
+ * `SlashCommandSubcommandBuilder` nested under one) with a CRUD's `id`/`delete`/
+ * custom options, and builds the matching `execute`/`autocomplete` handlers.
+ * Shared by {@link crudCommandUpdate} (owns a full top-level command) and
+ * {@link crudCommandUpdateSubcommand} (nests the same logic as one subcommand
+ * among siblings) — the two builder types expose identical option-adding
+ * methods via `SharedSlashCommandOptions`, so this logic doesn't need to care
+ * which one it's populating.
  */
-export function crudCommandUpdate<T extends DbRecord, N>(crudSettings: CrudCommandUpdateSettings<T, N>) {
-  if (!crudSettings.description) throw new Error("A command description is required");
+function buildCrudHandlers<T extends DbRecord, N>(
+  builder: SharedSlashCommandOptions<any>,
+  crudSettings: CrudCommandUpdateSettings<T, N>,
+) {
   if (!crudSettings.crud) throw new Error("The CRUD object is required");
-
-  const name = crudSettings.name ?? crudSettings.crud.name;
-
-  const builder = new SlashCommandBuilder()
-    .setName(name)
-    .setDescription(crudSettings.description)
-    .setDefaultMemberPermissions(crudSettings.defaultMemberPermissions);
 
   // Discord requires required options to precede non-required ones. `id` and
   // `delete` are always optional by design, so the caller's own options -
@@ -398,9 +402,52 @@ export function crudCommandUpdate<T extends DbRecord, N>(crudSettings: CrudComma
     }
   }
 
+  return { execute, autocomplete };
+}
+
+/**
+ * Defines a CRUD update command as a full top-level slash command.
+ */
+export function crudCommandUpdate<T extends DbRecord, N>(crudSettings: CrudCommandUpdateSettings<T, N>) {
+  if (!crudSettings.description) throw new Error("A command description is required");
+
+  const name = crudSettings.name ?? crudSettings.crud.name;
+
+  const builder = new SlashCommandBuilder()
+    .setName(name)
+    .setDescription(crudSettings.description)
+    .setDefaultMemberPermissions(crudSettings.defaultMemberPermissions);
+
+  const { execute, autocomplete } = buildCrudHandlers(builder, crudSettings);
+
   return {
     name: builder.name,
     data: builder,
+    execute,
+    autocomplete,
+  };
+}
+
+/**
+ * Defines a CRUD update command as a subcommand, for nesting alongside
+ * sibling subcommands (e.g. hand-rolled list-mutation actions) under one
+ * top-level command. Discord's `.addSubcommand()` accepts a pre-built
+ * `SlashCommandSubcommandBuilder` directly, so the returned `data` can be
+ * passed straight in - no factory-callback/closure-timing concerns.
+ */
+export function crudCommandUpdateSubcommand<T extends DbRecord, N>(crudSettings: CrudCommandUpdateSettings<T, N>) {
+  if (!crudSettings.description) throw new Error("A command description is required");
+
+  const name = crudSettings.name ?? crudSettings.crud.name;
+
+  const sub = new SlashCommandSubcommandBuilder()
+    .setName(name)
+    .setDescription(crudSettings.description);
+
+  const { execute, autocomplete } = buildCrudHandlers(sub, crudSettings);
+
+  return {
+    data: sub,
     execute,
     autocomplete,
   };

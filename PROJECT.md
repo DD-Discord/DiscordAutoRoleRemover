@@ -89,28 +89,37 @@ avoids re-alerting or re-processing on every unrelated role edit.
 
 ### Commands (`interactions/commands/`)
 
-8 top-level commands, `ManageRoles`-gated. Four are built via `crud.ts`'s
-`crudCommandUpdate` (declarative — an `id` option selects an existing
-record to edit/view, omitting it creates new, a `delete` boolean flag
-removes it, `id:all` bulk-applies); four are hand-rolled because Discord
-has no multi-select option type, so growing a pool's/conflict-rule's list
-field needs one-role/one-pool-at-a-time commands.
+4 top-level commands, `ManageRoles`-gated. `role-prereq` and `role-cap`
+each have exactly one action (create/edit/delete/list-in-one, via
+`crud.ts`'s `crudCommandUpdate`), so they stay flat. `role-pool` and
+`role-conflict` each need that same consolidated action *plus* one or two
+list-mutation actions (Discord has no multi-select option type, so
+growing a pool's/conflict-rule's list field needs one-role/one-pool-at-a-
+time actions) — those are grouped as subcommands under one top-level
+command via `crud.ts`'s `crudCommandUpdateSubcommand`.
 
-| Command | Built via | Purpose |
+| Command | Subcommands | Purpose |
 |---|---|---|
-| `role-pool` | `crudCommandUpdate` | Create/edit/delete/list role pools (`name` field only — membership below). |
-| `role-pool-add-role` | hand-rolled | Adds one role to a pool. |
-| `role-pool-remove-role` | hand-rolled | Removes one role from a pool. |
-| `role-prereq` | `crudCommandUpdate` | Create/edit/delete/list prerequisite rules (required pool, dependent pool, outcome, channel). |
-| `role-conflict` | `crudCommandUpdate` | Create/edit/delete/list conflict rules (name, alert channel — pool list below). |
-| `role-conflict-add-pool` | hand-rolled | Adds one pool to a conflict rule. |
-| `role-conflict-remove-pool` | hand-rolled | Removes one pool from a conflict rule. |
-| `role-cap` | `crudCommandUpdate` | Create/edit/delete/list pool cap rules (pool, max allowed, outcome, channel). |
+| `role-pool` | `manage`, `add-role`, `remove-role` | `manage` creates/edits/deletes/lists pools (`name` only); `add-role`/`remove-role` grow membership. |
+| `role-conflict` | `manage`, `add-pool`, `remove-pool` | `manage` creates/edits/deletes/lists rules (name, alert channel); `add-pool`/`remove-pool` grow the pool list. |
+| `role-prereq` | *(none — flat)* | Create/edit/delete/list prerequisite rules (required pool, dependent pool, outcome, channel). |
+| `role-cap` | *(none — flat)* | Create/edit/delete/list pool cap rules (pool, max allowed, outcome, channel). |
 
-**Important convention for any future `crudCommandUpdate` command**: pass
-an explicit kebab-case `name` — it defaults to the CRUD object's own
-`.name` (e.g. `'prerequisite rule'`), which contains a space and isn't a
-valid Discord command name.
+`manage` subcommands use `crudCommandUpdate`'s usual `id` (autocompleted,
+selects an existing record to edit/view; omit to create new, `id:all`
+bulk-applies) and `delete` boolean flag — same semantics as a flat
+`crudCommandUpdate` command, just nested.
+
+**Important conventions**:
+- Any `crudCommandUpdate`/`crudCommandUpdateSubcommand` call should pass an
+  explicit kebab-case `name`/subcommand name — `crudCommandUpdate` defaults
+  to the CRUD object's own `.name` (e.g. `'prerequisite rule'`), which
+  contains a space and isn't a valid Discord command name.
+- Subcommand descriptions are capped at 100 characters, same as top-level
+  command descriptions — Discord rejects the whole command registration
+  (a `shapeshift` `ExpectedConstraintError`, not an obvious validation
+  message) if one is too long. Keep `crudCommandUpdateSubcommand`
+  descriptions short.
 
 ## Data layer
 
@@ -161,6 +170,15 @@ Fixed by adding the caller's `options` first.
   autocomplete supporting `all` and comma-separated bulk IDs, an optional
   `delete` flag, per-option retrieval/validation/update) from a CRUD object
   plus a list of options.
+- `crudCommandUpdateSubcommand(subcommandName, settings)` — the same
+  create/edit/delete/list logic, nested as one `SlashCommandSubcommandBuilder`
+  instead of owning a full top-level command, so it can sit alongside
+  hand-rolled sibling subcommands under one parent (see `role-pool`/
+  `role-conflict` below). Both functions share a private
+  `buildCrudHandlers` that populates whichever option-capable builder
+  it's given — `SlashCommandBuilder` and `SlashCommandSubcommandBuilder`
+  expose identical option-adding methods via `@discordjs/builders`'
+  `SharedSlashCommandOptions`, so the same logic works for either.
 - `crudCommandOption.*` — reusable option builders: `simpleString`,
   `simpleBoolean`, `simpleChannel`, `simpleChoice` (string with
   `.addChoices`), `simpleNumber` (integer, min/max), `simpleFk` (foreign key
