@@ -68,7 +68,7 @@ export async function checkPrerequisiteRules(oldMember: GuildMember | PartialGui
       await sendAlert(
         newMember.guild,
         rule.alertChannel,
-        `⚠️ Prerequisite **${requiredPool.name} → ${dependentPool.name}**: ${newMember} no longer has ` +
+        `__⚠️ Prerequisite **${requiredPool.name} → ${dependentPool.name}**__\n${newMember} no longer has ` +
         `**${requiredPool.name}**, but still holds ${rolesToRemove.map(id => `<@&${id}>`).join(', ')} ` +
         `from **${dependentPool.name}**.`,
       );

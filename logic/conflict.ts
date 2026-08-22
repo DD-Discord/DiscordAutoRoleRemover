@@ -58,7 +58,7 @@ export async function checkConflictRules(oldMember: GuildMember | PartialGuildMe
     await sendAlert(
       newMember.guild,
       rule.alertChannel,
-      `⚠️ Conflict **${rule.name}**: ${newMember} now holds roles from ${newRepresented.length} mutually exclusive pools: ${newRepresented.map(pool => `**${pool.name}**`).join(', ')}.`,
+      `__⚠️ Conflict **${rule.name}**__\n${newMember} now holds roles from ${newRepresented.length} mutually exclusive pools: ${newRepresented.map(pool => `**${pool.name}**`).join(', ')}.`,
     );
   }
 }

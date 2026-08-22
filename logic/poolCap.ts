@@ -74,7 +74,7 @@ export async function checkPoolCapRules(oldMember: GuildMember | PartialGuildMem
     await sendAlert(
       newMember.guild,
       rule.alertChannel,
-      `⚠️ Pool cap **${pool.name}**: ${newMember} holds ${newHeld.length} roles (max ${rule.maxAllowed}): ${newHeld.map(id => `<@&${id}>`).join(', ')}.`,
+      `__⚠️ Pool cap **${pool.name}**__\n${newMember} holds ${newHeld.length} roles (max ${rule.maxAllowed}): ${newHeld.map(id => `<@&${id}>`).join(', ')}.`,
     );
   }
 }
