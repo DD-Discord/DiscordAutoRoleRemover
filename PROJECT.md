@@ -56,18 +56,42 @@ avoids re-alerting or re-processing on every unrelated role edit.
 
 A per-guild **singleton** (not a list — always exactly one record, keyed
 by the guild's own ID): `GuildAlertSettings { alertChannel: ChannelInfo |
-null; pingTargets: PingTarget[] }`, where a `PingTarget` is `{ type: 'role'
-| 'user'; id; name }`. `getAlertSettings(guildId)` returns a safe empty
-default (`alertChannel: null, pingTargets: []`) when nothing's configured
-yet, so every evaluator can call it unconditionally and just check
-`.alertChannel` before sending — no null-checking `alertSettingsData.get`
-directly. `logic/outcome.ts`'s `sendAlert(guild, settings, message)`
-prefixes the message with a mention for every ping target before sending.
+null; pingTargets: PingTarget[]; webhookId: string | null; webhookToken:
+string | null }`, where a `PingTarget` is `{ type: 'role' | 'user'; id;
+name }`. `getAlertSettings(guildId)` returns a safe empty default when
+nothing's configured yet, so every evaluator can call it unconditionally
+and just check `.alertChannel` before sending — no null-checking
+`alertSettingsData.get` directly.
+
+**Alerts post through a bot-managed webhook, not the bot itself** — the
+webhook's per-message `username`/`avatarURL` are overridden to the
+*reported member's* display name and avatar (`logic/outcome.ts`'s
+`sendAlert(guild, settings, message, member)`), so an alert visually reads
+as coming from the member in question. `createWebhookForChannel` (also in
+`alertSettings.ts`) creates it; requires the bot to have **Manage
+Webhooks** in the alert channel, in addition to the `ManageRoles`
+permission gating who can run the commands. If the stored webhook goes
+missing (e.g. a human deletes it via Discord's Integrations UI),
+`sendAlert` recreates one and retries automatically — no admin action
+needed. If a webhook genuinely can't be created/used at all, `sendAlert`
+falls back to a plain message from the bot itself rather than dropping
+the alert (no impersonation in that case, but it still arrives).
+
+Security note: `webhookToken` is stored in plain JSON on disk — anyone
+holding it can post as that webhook (any name/avatar they choose) to that
+channel, without needing the bot's own Discord token or permissions. This
+is the same local-trust-boundary risk profile already accepted for the
+bot's own token in `.env`/`.env.local`, not a new category of exposure,
+but worth knowing if `data/` ever needs to be shared or backed up
+somewhere less trusted.
 
 Configured via `/role-alerts` (hand-rolled, not `crudCommandUpdate` — a
 singleton has no create/edit/delete/list-all shape to reuse):
-`set-channel`, `add-ping`/`remove-ping` (Discord's Mentionable option type,
-resolving to a `Role`/`GuildMember`/`User` — disambiguated via
+`set-channel` (channel option restricted to `GuildText`/
+`GuildAnnouncement` — the only types `createWebhook` supports; also
+handles webhook creation and best-effort cleanup of the old one when the
+channel changes), `add-ping`/`remove-ping` (Discord's Mentionable option
+type, resolving to a `Role`/`GuildMember`/`User` — disambiguated via
 `instanceof`), and `check`.
 
 ## Entry point & runtime wiring (`index.ts`)
@@ -299,6 +323,14 @@ third:
   `alertSettingsData` table still needs a one-time `/role-alerts
   set-channel` after deploying (not a migration, since there's no prior
   data for that table to migrate from).
+- **Webhook-backed alerts** (adding `webhookId`/`webhookToken` to
+  `GuildAlertSettings`): no migration at all needed, not even a `migrate`
+  hook — every read site already does `if (!settings.webhookId ||
+  !settings.webhookToken)`, and a genuinely-missing key reads as
+  `undefined` at runtime, the same falsy branch as `null`. An
+  already-configured guild just gets its webhook auto-created the next
+  time an alert fires, via the exact same path used when a webhook goes
+  missing after being deleted externally.
 
 ## Known gaps / scaffolding not yet wired up
 

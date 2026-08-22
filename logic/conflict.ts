@@ -75,6 +75,7 @@ export async function checkConflictRules(oldMember: GuildMember | PartialGuildMe
       newMember.guild,
       getAlertSettings(rule.guildId),
       `__⚠️ Conflict **${rule.name}**__\n${newMember} now holds roles from ${newRepresented.length} mutually exclusive pools:\n${clashLines.join('\n')}`,
+      newMember,
     );
   }
 }

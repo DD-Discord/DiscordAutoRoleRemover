@@ -89,7 +89,7 @@ export async function checkPrerequisiteRules(oldMember: GuildMember | PartialGui
       const body = rule.fix
         ? `${newMember} lost **${requiredPool.name}** - auto-removed ${rolesToRemove.map(id => `<@&${id}>`).join(', ')} from **${dependentPool.name}**.`
         : `${newMember} no longer has **${requiredPool.name}**, but still holds ${rolesToRemove.map(id => `<@&${id}>`).join(', ')} from **${dependentPool.name}**.`;
-      await sendAlert(newMember.guild, getAlertSettings(rule.guildId), `${heading}\n${body}`);
+      await sendAlert(newMember.guild, getAlertSettings(rule.guildId), `${heading}\n${body}`, newMember);
     }
   }
 }

@@ -1,7 +1,7 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChatInputCommandInteraction, Role, GuildMember, User, GuildBasedChannel } from "discord.js";
+import { SlashCommandBuilder, PermissionFlagsBits, ChatInputCommandInteraction, Role, GuildMember, User, GuildBasedChannel, ChannelType } from "discord.js";
 import { getChannelInfo } from "../../util/channel.js";
 import { channelInfoToString, stringList } from "../../util/fmt.js";
-import { alertSettingsData, getAlertSettings, PingTarget } from "../../logic/alertSettings.js";
+import { alertSettingsData, getAlertSettings, createWebhookForChannel, PingTarget } from "../../logic/alertSettings.js";
 
 export const name = 'role-alerts';
 
@@ -12,7 +12,8 @@ export const data = new SlashCommandBuilder()
   .addSubcommand(sub => sub
     .setName('set-channel')
     .setDescription('Sets the channel alerts are posted to.')
-    .addChannelOption(option => option.setName('channel').setDescription('The alert channel.').setRequired(true)))
+    .addChannelOption(option => option.setName('channel').setDescription('The alert channel.').setRequired(true)
+      .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)))
   .addSubcommand(sub => sub
     .setName('add-ping')
     .setDescription('Adds a role or user to ping on every alert.')
@@ -53,7 +54,32 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   if (sub === 'set-channel') {
     const channel = interaction.options.getChannel('channel', true) as GuildBasedChannel;
     const settings = getAlertSettings(guildId);
+    const guild = interaction.guild!;
+
+    // Best-effort cleanup of the old webhook if the channel is actually changing.
+    if (settings.webhookId && settings.alertChannel && settings.alertChannel.id !== channel.id) {
+      try {
+        const oldChannel = await guild.channels.fetch(settings.alertChannel.id);
+        if (oldChannel && 'fetchWebhooks' in oldChannel) {
+          const webhook = (await oldChannel.fetchWebhooks()).get(settings.webhookId);
+          await webhook?.delete('Alert channel changed');
+        }
+      } catch (error) {
+        console.warn(`Failed to clean up old alert webhook in guild ${guildId}`, error);
+      }
+    }
+
+    const created = await createWebhookForChannel(channel.id, guild);
+    if (!created) {
+      return interaction.reply({
+        content: "Could not create a webhook in that channel — make sure I have the **Manage Webhooks** permission there, then try again.",
+        ephemeral: true,
+      });
+    }
+
     settings.alertChannel = getChannelInfo(channel);
+    settings.webhookId = created.id;
+    settings.webhookToken = created.token;
     alertSettingsData.write({ guildId }, settings);
     return interaction.reply({ content: `Alert channel set to ${channelInfoToString(settings.alertChannel)}.` });
   }

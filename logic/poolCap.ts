@@ -95,7 +95,7 @@ export async function checkPoolCapRules(oldMember: GuildMember | PartialGuildMem
       const body = fixed
         ? `${newMember} exceeded max ${rule.maxAllowed} for this pool - auto-removed ${newHeld.map(id => `<@&${id}>`).join(', ')}.`
         : `${newMember} holds ${newHeld.length} roles (max ${rule.maxAllowed}): ${newHeld.map(id => `<@&${id}>`).join(', ')}.`;
-      await sendAlert(newMember.guild, getAlertSettings(rule.guildId), `${heading}\n${body}`);
+      await sendAlert(newMember.guild, getAlertSettings(rule.guildId), `${heading}\n${body}`, newMember);
     }
   }
 }

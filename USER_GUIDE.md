@@ -4,7 +4,9 @@ This bot watches your server's roles and automatically keeps them in line
 with rules you configure — auto-fixing problems, notifying your mod team,
 or both at once.
 
-All commands below require **Manage Roles** permission to use.
+All commands below require **Manage Roles** permission to use. The bot's
+own role also needs **Manage Webhooks** permission in whichever channel
+you use for alerts (see below).
 
 ## Alert settings: one shared channel + ping list
 
@@ -14,7 +16,7 @@ per-rule).
 
 | Command | What it does |
 |---|---|
-| `/role-alerts set-channel channel:<#channel>` | Sets the channel alerts are posted to. |
+| `/role-alerts set-channel channel:<#channel>` | Sets the channel alerts are posted to (text/announcement channels only). |
 | `/role-alerts add-ping target:<@role-or-user>` | Adds a role or user to ping on every alert. |
 | `/role-alerts remove-ping target:<@role-or-user>` | Removes one. |
 | `/role-alerts check` | Shows the current channel and ping list. |
@@ -22,6 +24,16 @@ per-rule).
 You must run `set-channel` at least once before any rule can have alerting
 turned on — creating a rule with `alert:true` before that is configured is
 rejected with a clear error.
+
+**Alerts show up as the reported member, not the bot.** Behind the
+scenes, `set-channel` creates a webhook in that channel, and every alert
+is posted through it with the display name and avatar of whichever member
+triggered the rule — so it visually reads like the member is speaking up
+about themselves, not a generic bot notification. This needs the **Manage
+Webhooks** permission for the bot in that channel; if you ever delete
+that webhook by hand (Discord's channel Integrations settings), the bot
+just quietly creates a new one the next time an alert fires — nothing to
+reconfigure.
 
 ## The building block: Role Pools
 
