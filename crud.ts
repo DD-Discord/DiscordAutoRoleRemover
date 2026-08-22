@@ -12,7 +12,7 @@ import {
   GuildBasedChannel,
   Permissions,
 } from "discord.js";
-import { dbRegister, dbGet, dbGetAll, dbWrite, dbDelete, DbRecord, Table } from "./db.js";
+import { dbRegister, dbGet, dbGetAll, dbWrite, dbDelete, dbSerialize, dbDeserialize, DbRecord, Table } from "./db.js";
 import { sanitizeMarkdown, batchLines } from "./util/fmt.js";
 import { getChannelInfo } from "./util/channel.js";
 
@@ -342,9 +342,15 @@ function buildCrudHandlers<T extends DbRecord, N>(
     // rejected edit the moment `validate` fails below - even though nothing
     // was ever written to disk. Cloning means a validation failure leaves
     // every original record (cache included) completely untouched.
+    //
+    // Cloned via dbSerialize/dbDeserialize rather than structuredClone: this
+    // is the same custom-type-aware round-trip a real write/read already
+    // goes through, so the clone validate() sees is guaranteed identical to
+    // what would actually end up on disk (structuredClone, e.g., preserves
+    // `undefined`-valued keys that a real JSON round-trip would drop).
     const updatedRecords: T[] = [];
     for (const record of recordsToUpdate) {
-      const updated = structuredClone(record);
+      const updated = dbDeserialize<T>(dbSerialize(record));
       for (let i = 0; i < crudSettings.options.length; i++) {
         const option = crudSettings.options[i]!;
         const value = optionsValueArray[i];
