@@ -18,8 +18,8 @@ simple case: even a single-role condition (like "is boosting") is just a
 pool with one role in it. Three rule types reference pools:
 
 1. **Prerequisite rules** (`logic/prerequisite.ts`) — if a member loses
-   their last role from a *trigger pool*, strip whatever roles they hold
-   from a *remove pool*. This is the original Booster→colours behavior,
+   their last role from a *required pool*, strip whatever roles they hold
+   from a *dependent pool*. This is the original Booster→colours behavior,
    generalized.
 2. **Conflict rules** (`logic/conflict.ts`) — 2+ pools that are mutually
    exclusive; if a member ends up with roles from 2+ of them at once,
@@ -101,7 +101,7 @@ field needs one-role/one-pool-at-a-time commands.
 | `role-pool` | `crudCommandUpdate` | Create/edit/delete/list role pools (`name` field only — membership below). |
 | `role-pool-add-role` | hand-rolled | Adds one role to a pool. |
 | `role-pool-remove-role` | hand-rolled | Removes one role from a pool. |
-| `role-prereq` | `crudCommandUpdate` | Create/edit/delete/list prerequisite rules (trigger pool, remove pool, outcome, channel). |
+| `role-prereq` | `crudCommandUpdate` | Create/edit/delete/list prerequisite rules (required pool, dependent pool, outcome, channel). |
 | `role-conflict` | `crudCommandUpdate` | Create/edit/delete/list conflict rules (name, alert channel — pool list below). |
 | `role-conflict-add-pool` | hand-rolled | Adds one pool to a conflict rule. |
 | `role-conflict-remove-pool` | hand-rolled | Removes one pool from a conflict rule. |
@@ -130,8 +130,11 @@ A minimal file-based database with no external dependencies:
   four tables.
 - Always query through a CRUD's own `getAll`/`get` (namespaced,
   e.g. `prerequisiteRuleData.getAll({ guildId })`), never a raw
-  `dbGetAll("tablename")` with a flat string — see "A bug this uncovered"
-  above for what goes wrong otherwise.
+  `dbGetAll("tablename")` with a flat string — the original JS had exactly
+  this bug (`dbGetAll("roles")` reading a flat, never-registered table
+  instead of the actual namespaced `[guildId, 'roles']` one), silently
+  breaking the bot's core feature until it was found and fixed during the
+  pool/rule-engine rewrite.
 - **Custom type serialization**: `Date`, `Set`, and `Map` values are
   (de)serialized through a small replacer/reviver registry (`customTypes`)
   so they round-trip through `JSON.stringify`/`parse` as
@@ -226,7 +229,7 @@ roles) needs to be manually recreated after deploying:
    exists — for now it's create-then-add).
 2. `/role-pool name:Colors`, then `/role-pool-add-role` each of the 9
    colour roles into it.
-3. `/role-prereq trigger:<Booster pool> remove:<Colors pool> outcome:fix
+3. `/role-prereq required:<Booster pool> dependent:<Colors pool> outcome:fix
    channel:<any channel, required but unused in fix mode>`.
 4. Delete the stale
    `data/1220062574419116054/roles/812613272984748063.json` (or just leave

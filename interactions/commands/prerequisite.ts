@@ -8,21 +8,21 @@ type Namespace = { guildId: string };
 
 export const { name, data, execute, autocomplete } = crudCommandUpdate<PrerequisiteRule, Namespace>({
   name: 'role-prereq',
-  description: 'Strips a pool of roles from members who lose their last role from a trigger pool.',
+  description: 'Strips a pool of dependent roles from members who lose their last required role.',
   crud: prerequisiteRuleData,
   options: [
     crudCommandOption.simpleFk<PrerequisiteRule, RolePool, Namespace>({
-      name: 'trigger',
+      name: 'required',
       description: 'The pool whose absence triggers this rule.',
-      key: 'triggerPoolId',
+      key: 'requiredPoolId',
       fkCrud: rolePoolData,
       getFkNamespace: interaction => ({ guildId: interaction.guildId! }),
       required: true,
     }),
     crudCommandOption.simpleFk<PrerequisiteRule, RolePool, Namespace>({
-      name: 'remove',
+      name: 'dependent',
       description: 'The pool of roles to strip.',
-      key: 'removePoolId',
+      key: 'dependentPoolId',
       fkCrud: rolePoolData,
       getFkNamespace: interaction => ({ guildId: interaction.guildId! }),
       required: true,
@@ -47,8 +47,8 @@ export const { name, data, execute, autocomplete } = crudCommandUpdate<Prerequis
   getDefault: interaction => ({
     id: dbId(),
     guildId: interaction.guildId!,
-    triggerPoolId: '',
-    removePoolId: '',
+    requiredPoolId: '',
+    dependentPoolId: '',
     action: 'fix',
     alertChannel: { id: '', name: '' },
   }),
