@@ -55,10 +55,15 @@ export async function checkConflictRules(oldMember: GuildMember | PartialGuildMe
       continue;
     }
 
+    const clashLines = newRepresented.map(pool => {
+      const heldRoleIds = pool.roleIds.filter(id => newMember.roles.cache.has(id));
+      return `- **${pool.name}**: ${heldRoleIds.map(id => `<@&${id}>`).join(', ')}`;
+    });
+
     await sendAlert(
       newMember.guild,
       rule.alertChannel,
-      `__⚠️ Conflict **${rule.name}**__\n${newMember} now holds roles from ${newRepresented.length} mutually exclusive pools: ${newRepresented.map(pool => `**${pool.name}**`).join(', ')}.`,
+      `__⚠️ Conflict **${rule.name}**__\n${newMember} now holds roles from ${newRepresented.length} mutually exclusive pools:\n${clashLines.join('\n')}`,
     );
   }
 }
